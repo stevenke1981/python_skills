@@ -16,6 +16,8 @@
 | [py-perf](py-perf/SKILL.md) | 效能優化 | cProfile/Pyinstrument/line_profiler 分析、tracemalloc 記憶體、資料結構選擇、最佳化模式 | 3.10+ |
 | [py-ai](py-ai/SKILL.md) | AI/ML 整合 | RAG pipeline、embeddings、agents/tool calling、prompt engineering、LangChain/LlamaIndex/Transformers | 3.10+ |
 | [py-web](py-web/SKILL.md) | Web 開發 | FastAPI routing/DI、Pydantic v2 驗證、SQLAlchemy 2.0 async ORM、HTTPX、JWT 認證 | 3.9+ |
+| [py-gui](py-gui/SKILL.md) | GUI 桌面應用 | tkinter/ttk、CustomTkinter 現代 UI、PySide6/PyQt6 Qt 綁定、事件迴圈、多執行緒 | 3.10+ |
+| [py-network](py-network/SKILL.md) | 網路程式設計 | socket TCP/UDP、asyncio streams、HTTP httpx/aiohttp、WebSocket、SSL/TLS、DNS | 3.10+ |
 
 ## 目錄結構
 
@@ -77,7 +79,19 @@ python-skills/
 │       ├── examples.md
 │       ├── cheatsheet.md
 │       └── pitfalls.md
-└── py-web/
+├── py-web/
+│   ├── SKILL.md
+│   └── references/
+│       ├── examples.md
+│       ├── cheatsheet.md
+│       └── pitfalls.md
+├── py-gui/
+│   ├── SKILL.md
+│   └── references/
+│       ├── examples.md
+│       ├── cheatsheet.md
+│       └── pitfalls.md
+└── py-network/
     ├── SKILL.md
     └── references/
         ├── examples.md
