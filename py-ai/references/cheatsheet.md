@@ -1,254 +1,280 @@
-# py-ai — 速查表
+# py-ai 速查表
 
-## LangChain 速查
+> 本文件補充 [`../SKILL.md`](../SKILL.md)。SDK、模型名稱、價格與框架 API 變動快速；以專案 lockfile 與供應商官方文件為準。
 
-### 安裝
+## 最小架構
+
+```text
+UI / API
+   ↓
+Application service
+   ↓
+ChatBackend / EmbeddingBackend / ToolPolicy (Protocol)
+   ↓
+Provider adapter / local runtime / vector store
+```
+
+核心規則：
+
+- model、provider、base URL、timeout 與 token budget 由設定注入。
+- 業務層不 import 特定供應商 SDK type。
+- 所有模型輸出視為不可信資料，先驗證再使用。
+- 外部文件與工具輸出也可能含 prompt injection。
+- 寫入、刪除、付款、寄信與部署需明確授權。
+
+## 設定範例
 
 ```bash
-# 核心
-pip install langchain langchain-core
-
-# LLM Provider（按需安裝）
-pip install langchain-openai       # OpenAI / Azure OpenAI
-pip install langchain-anthropic    # Claude
-pip install langchain-google-genai # Gemini
-
-# 向量庫
-pip install langchain-chroma       # ChromaDB
-pip install langchain-community    # 社群整合
+export AI_PROVIDER="provider-name"
+export AI_MODEL="provider-model-id"
+export AI_BASE_URL="https://api.example.invalid/v1"
+export AI_API_KEY="..."
+export AI_TIMEOUT_SECONDS="30"
+export AI_MAX_OUTPUT_TOKENS="800"
 ```
 
-### LLM 呼叫
+不要在 shell command、source code、trace 或錯誤訊息中回顯 key。正式環境優先使用 secret manager。
+
+## Provider Adapter Checklist
+
+- [ ] request message mapping
+- [ ] model/base URL/config validation
+- [ ] connect/read/write/pool timeout
+- [ ] bounded retry + jitter
+- [ ] usage/token extraction
+- [ ] streaming event normalization
+- [ ] structured output support/fallback
+- [ ] provider error → stable application error
+- [ ] cancellation/client disconnect
+- [ ] log/trace redaction
+
+## Structured Output
 
 ```python
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
+from typing import Literal
 
-# OpenAI
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+from pydantic import BaseModel, Field
 
-# Anthropic
-llm = ChatAnthropic(model="claude-sonnet-4-6")
 
-# 同步呼叫
-response = llm.invoke("你好")
+class Result(BaseModel):
+    category: Literal["billing", "technical", "other"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str = Field(min_length=1, max_length=500)
 
-# 串流
-for chunk in llm.stream("說一個故事"):
-    print(chunk.content, end="")
 
-# 非同步
-response = await llm.ainvoke("你好")
+result = Result.model_validate_json(raw_json)
 ```
 
-### Chain（LCEL 語法）
+檢查：
+
+- enum、長度、範圍與 required field
+- invalid JSON 的有限次修復
+- schema version
+- deterministic calculation 留給程式碼
+- validation failure 不可靜默填值
+
+## Prompt 結構
+
+```text
+SYSTEM
+- 任務與角色
+- 可使用的資料來源
+- 禁止行為與安全邊界
+- 輸出 schema
+- 資料不足時如何回答
+
+USER
+- 使用者要求
+
+CONTEXT (untrusted)
+- 文件、檢索結果、工具輸出
+- 明確標示來源與邊界
+```
+
+不要把 untrusted context 拼接成 system instruction。
+
+## RAG Pipeline
+
+```text
+ingest
+  → parse structure
+  → attach source/version/permission metadata
+  → chunk
+  → embed/index
+  → retrieve with permission filter
+  → rerank (optional)
+  → generate with citations
+  → validate groundedness
+```
+
+### Ingestion Checklist
+
+- [ ] source ID、版本、段落位置
+- [ ] tenant／ACL metadata
+- [ ] parse failure 統計
+- [ ] duplicate/near-duplicate handling
+- [ ] chunk strategy 依文件結構
+- [ ] embedding/index version
+- [ ] 可重建與可刪除
+
+### Retrieval Checklist
+
+- [ ] keyword/vector/hybrid baseline
+- [ ] permission filter 在生成前執行
+- [ ] top-k 由 eval 決定
+- [ ] reranker 只在有增益時加入
+- [ ] 查無證據允許拒答
+- [ ] citation 真正支持結論
+
+### Eval Metrics
+
+| 層次 | 指標 |
+|---|---|
+| Retrieval | recall@k、precision@k、MRR、權限隔離 |
+| Generation | groundedness、citation correctness、usefulness |
+| Operation | latency、token、成本、timeout、error rate |
+| Safety | injection success、secret leakage、tool authorization |
+
+## Tool Calling
+
+### Tool Schema
 
 ```python
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from typing import Literal
 
-prompt = ChatPromptTemplate.from_template("翻譯成{lang}: {text}")
-chain = prompt | llm | StrOutputParser()
-result = chain.invoke({"lang": "英文", "text": "你好世界"})
+from pydantic import BaseModel, Field
+
+
+class ToolRequest(BaseModel):
+    action: Literal["read", "list"]
+    relative_path: str = Field(min_length=1, max_length=240)
 ```
 
-### Agent
+### Executor Checklist
+
+- [ ] allowlist tool names
+- [ ] executor 重新驗證參數
+- [ ] path/URL/tenant boundary
+- [ ] timeout、step、token、cost limit
+- [ ] idempotency／duplicate protection
+- [ ] dry-run／human confirmation
+- [ ] result size limit
+- [ ] audit log with redaction
+- [ ] tool output 仍視為 untrusted
+
+## Streaming
+
+```text
+provider event
+  → normalized internal event
+  → bounded queue
+  → client
+```
+
+- client disconnect 時取消上游工作。
+- queue 有上限，slow client 有 drop/disconnect policy。
+- partial token 不是已驗證的 structured result。
+- 最終結果完成後再做 schema validation。
+
+## Async Fan-out
 
 ```python
-from langchain.agents import create_agent
+import asyncio
 
-agent = create_agent(
-    model="gpt-4o-mini",
-    tools=[my_tool],
-    system_prompt="...",
-)
-result = agent.invoke({"messages": [{"role": "user", "content": "..."}]})
+
+async def bounded_call(item: str, semaphore: asyncio.Semaphore) -> str:
+    async with semaphore:
+        return await backend.generate(item)
+
+
+async def run_batch(items: list[str], limit: int = 5) -> list[str]:
+    semaphore = asyncio.Semaphore(limit)
+    async with asyncio.TaskGroup() as group:
+        tasks = [
+            group.create_task(bounded_call(item, semaphore))
+            for item in items
+        ]
+    return [task.result() for task in tasks]
 ```
 
-### Structured Output
+大量 input 不要一次建立所有 task；改用 bounded queue。retry budget 必須包含在整體 deadline。
 
-```python
-from pydantic import BaseModel
+## 本地模型
 
-class Output(BaseModel):
-    name: str
-    score: float
+### 啟動前檢查
 
-structured_llm = llm.with_structured_output(Output)
-result = structured_llm.invoke("...")  # 回傳 Output 物件
-```
+- [ ] model license
+- [ ] tokenizer/model format
+- [ ] VRAM/RAM 與 context length
+- [ ] CUDA/ROCm/Metal/CPU backend
+- [ ] quantization quality eval
+- [ ] cold start 與 cache disk
+- [ ] OOM/corrupt weights fallback
+- [ ] concurrent request limit
 
----
+### GPU 選擇
 
-## LlamaIndex 速查
+不要只寫 `device="cuda"` 就假設可用。啟動時偵測 backend、記錄實際裝置，並提供 CPU/remote fallback。
 
-### 安裝
+## 模型與供應商選擇
 
-```bash
-pip install llama-index                   # 核心
-pip install llama-index-llms-openai       # OpenAI LLM
-pip install llama-index-embeddings-openai # OpenAI Embeddings
-pip install llama-index-vector-stores-chroma  # ChromaDB
-```
+| 需求 | 評估項目 |
+|---|---|
+| 高品質推理 | task eval、tool/JSON reliability、latency、cost |
+| 低成本大量分類 | small model accuracy、batch、cache、fallback |
+| 多語言 RAG | embedding/retrieval eval、tokenization、reranker |
+| 離線與隱私 | license、hardware、data residency、operations |
+| 高吞吐服務 | continuous batching、KV cache、queue、autoscaling |
+| 長上下文 | effective retrieval/attention quality，不只看宣告上限 |
 
-### 5 行 RAG
+不要在共用 skill 固定「最好」模型；以當前 eval 與官方支援決定。
 
-```python
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+## 成本控制
 
-documents = SimpleDirectoryReader("data").load_data()
-index = VectorStoreIndex.from_documents(documents)
-engine = index.as_query_engine()
-response = engine.query("問題")
-```
+- token/input size 上限
+- model routing 與 fallback
+- prompt/context 去重
+- embedding/index 增量更新
+- cache 有 tenant/key/version 邊界
+- per-request/per-user budget
+- usage metric 與 anomaly alert
+- live eval 與外部 API 測試 opt-in
 
-### ReAct Agent
+價格不可硬編碼為長期事實；從核准設定或當前官方資料取得。
 
-```python
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import FunctionTool
+## Observability
 
-tool = FunctionTool.from_defaults(fn=my_func)
-agent = ReActAgent.from_tools([tool], llm=llm, verbose=True)
-response = agent.chat("問題")
-```
+記錄：
 
-### 自訂 Retriever 參數
+- request/trace ID
+- provider/model/config version
+- prompt template version
+- retrieval source IDs（依隱私遮蔽）
+- tool name、授權來源與結果狀態
+- input/output token 或等效 usage
+- latency、retry、timeout、fallback
+- schema validation／safety failure
 
-```python
-engine = index.as_query_engine(
-    similarity_top_k=5,          # 檢索前 5 筆
-    response_mode="tree_summarize",  # 摘要模式
-)
-```
+不要記錄完整秘密、敏感文件、authorization header 或不必要的 prompt/body。
 
----
+## 測試矩陣
 
-## Transformers 速查
+| 測試 | 使用方式 |
+|---|---|
+| Unit | fake backend、parser、policy、routing |
+| Contract | adapter request/response mapping |
+| Eval | 固定 dataset 比較模型/prompt/retriever |
+| Adversarial | prompt injection、tool escalation、secret leakage |
+| Failure | timeout、rate limit、invalid JSON、OOM、disconnect |
+| Live | opt-in、有限成本、核准帳號與環境 |
 
-### Pipeline 快速推論
+## 發布前 Checklist
 
-```python
-from transformers import pipeline
-
-# 情感分析
-classifier = pipeline("sentiment-analysis")
-classifier("I love Python!")
-
-# 文字生成
-generator = pipeline("text-generation", model="gpt2")
-generator("The future is", max_new_tokens=50)
-
-# 問答
-qa = pipeline("question-answering")
-qa(question="Who?", context="...")
-
-# 摘要
-summarizer = pipeline("summarization")
-summarizer(long_text, max_length=100)
-
-# 翻譯
-translator = pipeline("translation_en_to_fr")
-translator("Hello world")
-```
-
-### 可用的 Pipeline 任務
-
-| 任務 | pipeline() 參數 | 說明 |
-|------|-----------------|------|
-| 情感分析 | `"sentiment-analysis"` | 正面/負面分類 |
-| 文字生成 | `"text-generation"` | 自回歸生成 |
-| 閱讀理解 | `"question-answering"` | 基於段落回答 |
-| 文字摘要 | `"summarization"` | 長文摘要 |
-| 翻譯 | `"translation_xx_to_yy"` | 語言翻譯 |
-| 填空 | `"fill-mask"` | 遮罩語言模型 |
-| NER | `"ner"` | 命名實體辨識 |
-| 零樣本分類 | `"zero-shot-classification"` | 無需訓練的分類 |
-
-### GPU 設定
-
-```python
-# 自動選擇 GPU
-pipe = pipeline("text-generation", model="gpt2", device="cuda")
-
-# 指定 GPU 編號
-pipe = pipeline("text-generation", model="gpt2", device="cuda:0")
-
-# 多 GPU（模型平行）
-from transformers import AutoModelForCausalLM
-model = AutoModelForCausalLM.from_pretrained("meta-llama/...", device_map="auto")
-```
-
----
-
-## Embedding 模型選擇
-
-| 模型 | 維度 | 特點 | 安裝 |
-|------|------|------|------|
-| text-embedding-3-small | 1536 | OpenAI、CP 值最高 | langchain-openai |
-| text-embedding-3-large | 3072 | OpenAI、最高品質 | langchain-openai |
-| all-MiniLM-L6-v2 | 384 | 免費本地、快速 | sentence-transformers |
-| bge-large-en-v1.5 | 1024 | 開源、高品質 | sentence-transformers |
-| nomic-embed-text | 768 | 開源、長上下文 | Ollama / HF |
-
----
-
-## 向量資料庫選擇
-
-| 資料庫 | 類型 | 適用場景 | Python 套件 |
-|--------|------|----------|-------------|
-| ChromaDB | 嵌入式 | 原型開發、小規模 | `chromadb` |
-| FAISS | 嵌入式 | 高效能本地搜尋 | `faiss-cpu` / `faiss-gpu` |
-| Pinecone | 雲端 | 生產級、全託管 | `pinecone-client` |
-| Weaviate | 自架/雲端 | 多模態、GraphQL | `weaviate-client` |
-| Qdrant | 自架/雲端 | Rust 核心、高效能 | `qdrant-client` |
-| pgvector | PostgreSQL | 已有 PG 的專案 | `pgvector` |
-
----
-
-## 環境變數設定
-
-```bash
-# OpenAI
-export OPENAI_API_KEY="sk-..."
-
-# Anthropic
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# LangSmith（觀測）
-export LANGSMITH_TRACING=true
-export LANGSMITH_API_KEY="lsv2_..."
-
-# Hugging Face
-export HF_TOKEN="hf_..."
-
-# Azure OpenAI
-export AZURE_OPENAI_API_KEY="..."
-export AZURE_OPENAI_ENDPOINT="https://xxx.openai.azure.com/"
-```
-
----
-
-## 快速決策指南
-
-```
-需要 RAG？
-├── 快速原型 → LlamaIndex（5 行 RAG）
-├── 複雜 Chain → LangChain LCEL
-└── 生產級檢索 → LlamaIndex + Reranker
-
-需要 Agent？
-├── 簡單工具呼叫 → LangChain create_agent
-├── 多步驟推理 → LlamaIndex ReActAgent
-└── 複雜工作流 → LangGraph
-
-本地推論？
-├── 分類/NER → Transformers pipeline
-├── 聊天機器人 → Ollama + llama.cpp
-└── 高吞吐服務 → vLLM
-
-模型選擇？
-├── 最強能力 → GPT-4o / Claude Opus
-├── CP 值最高 → GPT-4o-mini / Claude Haiku
-└── 離線/隱私 → Llama 3 / Mistral / Phi
-```
+- [ ] model/provider 可由設定替換
+- [ ] schema validation 與有限修復
+- [ ] tool allowlist、最小權限與確認
+- [ ] RAG ACL、citation 與拒答
+- [ ] eval dataset、基準與 regression threshold
+- [ ] timeout、retry、queue、step、token、cost limit
+- [ ] secret/data retention/region policy
+- [ ] tracing、redaction、fallback 與 rollback
