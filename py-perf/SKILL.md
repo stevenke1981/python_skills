@@ -1,272 +1,258 @@
 ---
 name: py-perf
 description: >
-  Python performance optimization, profiling, benchmarking, and memory tuning.
-  Trigger when user mentions profiling, cProfile, line_profiler, memory_profiler,
-  Pyinstrument, timeit, optimization, bottleneck, slow code, memory leak.
-  Also trigger when user asks about Cython, mypyc, Numba, JIT compilation,
-  or free-threaded Python performance.
+  Measure, diagnose, and improve Python performance with reproducible benchmarks, cProfile, Pyinstrument, py-spy, Scalene, Memray, tracemalloc, line profiling, allocation analysis, algorithmic changes, vectorization, caching, concurrency, and performance regression tests. Use for slow code, high memory, throughput or latency regressions, CPU or I/O bottlenecks, startup cost, and evaluating free-threaded Python or experimental JIT behavior.
+compatibility: Agent Skills-compatible. Profilers and benchmark results depend on Python build, operating system, hardware, native extensions, and workload; record the complete environment.
+metadata:
+  author: stevenke1981
+  version: "2.0.0"
+  last-reviewed: "2026-07-30"
 ---
 
-# Python 效能優化
+# Python 效能分析與最佳化
 
-## Quick Start（30 秒上手）
+## 目標與邊界
+
+用此 skill 找出可重現的瓶頸，採用最小且可驗證的改善，並防止效能回歸。
+
+不要在沒有代表性 workload、correctness test 與 baseline 時進行猜測性微調。效能改善不能以單次執行、開發機體感或未說明環境的倍數宣稱。
+
+## 執行流程
+
+1. **定義效能目標**：延遲 percentile、吞吐、CPU、記憶體峰值、allocation、startup、I/O 或成本。
+2. **建立正確性基準**：先確保輸出與行為可測；最佳化前後必須相同。
+3. **建立代表性 workload**：資料大小、分布、並行、cache 狀態與冷／熱啟動符合實際使用。
+4. **量測 baseline**：記錄 Python build、套件版本、OS、CPU、核心數、電源模式與命令。
+5. **選擇 profiler**：先找出時間或記憶體熱點，再使用行級工具細查。
+6. **一次修改一個瓶頸**：優先演算法、資料流與 I/O，再考慮低階微調。
+7. **重新量測與比較**：重複樣本、觀察變異、確認沒有轉移瓶頸。
+8. **建立 regression gate**：保存 benchmark、環境與可接受閾值。
+9. **回報 trade-off**：可讀性、記憶體、精確度、延遲、相容性與維護成本。
+
+## 工具選擇
+
+| 問題 | 優先工具 | 用途 |
+|---|---|---|
+| 整體函式時間 | `cProfile`, Pyinstrument | 找出 cumulative/self time 熱點 |
+| 不停止線上程序的取樣 | py-spy | attach 或產生 flame graph |
+| CPU／記憶體／native 交界 | Scalene | 區分 Python/native/system 時間 |
+| Python allocation 與 leak | tracemalloc, Memray | snapshot、allocation stack、peak memory |
+| 單一函式逐行時間 | line_profiler | 已知熱點後細查 |
+| 小型穩定 benchmark | `timeit`, pyperf | 重複量測與統計 |
+| SQL／DataFrame | query plan、引擎 profiler | 不只看 Python call stack |
+| Async／network | tracing、queue depth、pool stats | 找等待、背壓與 connection 問題 |
+
+Profiler 會改變程式行為與時間分布。用取樣工具找大方向，再用 benchmark 驗證實際改善。
+
+## Benchmark 基本規則
+
+- 將 setup 與被測 operation 分離。
+- 使用多次 process/run，而不是只跑一次。
+- 記錄 warm-up、cold cache 與 steady-state 差異。
+- 產生固定或有 seed 的資料，失敗時保存 seed。
+- 量測真實輸入大小；microbenchmark 只回答局部問題。
+- 避免同時跑大型下載、編譯、同步或省電模式。
+- 比較相同 Python build、dependency 與環境設定。
+- CI benchmark 使用寬鬆且有統計依據的 regression threshold，避免把噪音當失敗。
+
+### 標準函式庫範例
 
 ```python
-from cProfile import Profile
-from pstats import SortKey, Stats
+from statistics import median
+from timeit import repeat
 
-def slow_func() -> list[int]:
-    """找出 100 萬以內的質數"""
-    return [n for n in range(2, 1_000_000)
-            if all(n % d != 0 for d in range(2, int(n**0.5) + 1))]
 
-with Profile() as pr:
-    result = slow_func()
-    Stats(pr).strip_dirs().sort_stats(SortKey.CUMULATIVE).print_stats(10)
+def normalize(values: list[str]) -> list[str]:
+    return [value.strip().lower() for value in values]
+
+
+def benchmark() -> float:
+    values = [f" Item {index} " for index in range(10_000)]
+    samples = repeat(
+        stmt=lambda: normalize(values),
+        repeat=7,
+        number=100,
+    )
+    return median(samples)
+
+
+if __name__ == "__main__":
+    print(f"median seconds: {benchmark():.6f}")
 ```
 
-一行指令 profiling：
+這只能作本機比較。正式報告需保存所有樣本、環境與輸入描述。
+
+## CPU Profiling
+
+### cProfile
+
 ```bash
-python -m cProfile -s cumulative my_script.py
+python -m cProfile -o profile.prof app.py
+python -m pstats profile.prof
 ```
 
-## 核心概念
+在 `pstats` 中查看 cumulative time、self time 與 call count。不要只最佳化呼叫次數最多的函式；先看總成本與業務重要性。
 
-### 1. 先量測，再優化
+### Sampling Profiler
 
-效能優化的黃金法則：**不要猜，要量測**。
+取樣 profiler 適合長時間程序、服務與低侵入調查：
 
-```python
-import timeit
-
-# 基準測試：比較兩種實作
-list_time = timeit.timeit("sum(range(10_000))", number=1000)
-gen_time = timeit.timeit(
-    "sum(x for x in range(10_000))", number=1000
-)
-print(f"list: {list_time:.4f}s  generator: {gen_time:.4f}s")
+```bash
+py-spy record -o profile.svg -- python app.py
 ```
 
-### 2. CPU Profiling — 確定性 vs 統計性
+attach 線上 process 可能需要額外 OS 權限。先確認環境與授權，不在未知 production 主機任意操作。
 
-| 類型 | 工具 | 原理 | 優缺點 |
-|------|------|------|--------|
-| 確定性 | cProfile | 攔截所有函式呼叫 | 精確但有 overhead |
-| 統計性 | Pyinstrument | 定時取樣 call stack | 低 overhead、樹狀報告 |
-| 行級 | line_profiler | 逐行計時 | 超精細、高 overhead |
+## 記憶體與 Allocation
+
+### tracemalloc snapshot
 
 ```python
-# Pyinstrument — 統計性 profiler（推薦日常使用）
-from pyinstrument import Profiler
-
-with Profiler() as p:
-    slow_func()
-
-p.print()               # 終端樹狀報告
-p.open_in_browser()     # 互動式 HTML 報告
-```
-
-### 3. 記憶體 Profiling
-
-```python
-# 方法 1：tracemalloc（標準函式庫）
 import tracemalloc
 
-tracemalloc.start()
-data = [dict(x=i, y=i**2) for i in range(100_000)]
-snapshot = tracemalloc.take_snapshot()
 
-for stat in snapshot.statistics("lineno")[:5]:
+def build_records(count: int) -> list[dict[str, int]]:
+    return [{"id": index, "square": index * index} for index in range(count)]
+
+
+tracemalloc.start()
+before = tracemalloc.take_snapshot()
+records = build_records(100_000)
+after = tracemalloc.take_snapshot()
+
+for stat in after.compare_to(before, "lineno")[:10]:
     print(stat)
 ```
 
-### 4. 資料結構選擇
+注意：
 
-| 操作 | list | deque | set | dict |
-|------|------|-------|-----|------|
-| append | O(1)* | O(1) | — | — |
-| prepend | O(n) | O(1) | — | — |
-| 查找 | O(n) | O(n) | O(1) | O(1) |
-| 刪除 | O(n) | O(n) | O(1) | O(1) |
+- tracemalloc 主要追蹤 Python allocation，不代表 process RSS 的全部來源。
+- native library、mmap、GPU 與 allocator fragmentation 需使用相應工具。
+- leak 調查要比較多個時間點與穩定 workload，不只看一次高峰。
+- 記憶體減少可能換來更多 CPU/I/O；一起量測。
 
-### 5. 常見加速手段
+## 最佳化優先順序
 
-```python
-# ❌ 慢：在迴圈中重複查找屬性
-for item in items:
-    result.append(item.lower())
+### 1. 演算法與資料結構
 
-# ✅ 快：本地變數綁定
-_append = result.append
-_lower = str.lower
-for item in items:
-    _append(_lower(item))
-```
+- 避免不必要的 O(n²) search/join。
+- membership 使用 set/dict，而非重複掃描 list。
+- 對已排序資料使用適合演算法。
+- 大量資料採 streaming/chunking，不一次 materialize。
+- 降低 serialization、copy 與跨 process 傳輸。
 
-## 實戰 Patterns
+### 2. 減少工作量
 
-### Pattern 1: Benchmark Decorator
+- 儘早 filter，只選需要欄位。
+- 合併重複 I/O，使用 batch。
+- 重用 HTTP/DB client 與 connection pool。
+- 避免重複 parse、compile、schema 建立與模型載入。
+- cache 只用於可辨識 key、可控大小與可失效資料。
 
-**場景**：開發時快速比較函式效能。
+### 3. 使用最佳化實作
 
-```python
-import functools
-import time
-from typing import Callable, ParamSpec, TypeVar
+- NumPy/Polars/Arrow/native library 取代純 Python hot loop，前提是轉換成本合理。
+- SQL 工作交給資料庫並檢查 query plan。
+- 字串與二進位資料避免不必要 encode/decode/copy。
+- 需要 native extension 時，先評估 wheel、ABI、除錯與維護成本。
 
-P = ParamSpec("P")
-R = TypeVar("R")
+### 4. 微最佳化
 
-def benchmark(func: Callable[P, R]) -> Callable[P, R]:
-    """裝飾器：列印函式執行時間"""
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        start = time.perf_counter()
-        result = func(*args, **kwargs)
-        elapsed = time.perf_counter() - start
-        print(f"{func.__name__}: {elapsed:.4f}s")
-        return result
-    return wrapper
+局部變數綁定、手動展開迴圈或難讀的 comprehension 通常不是第一步。只有 profiler 證明該位置主導成本，且 benchmark 顯示穩定收益時才採用。
 
-@benchmark
-def process_data(n: int) -> list[int]:
-    return sorted(range(n, 0, -1))
-```
-
-### Pattern 2: `__slots__` 節省記憶體
-
-**場景**：大量小物件（>10,000 個）。
-
-```python
-# 一般 class：每個實例有 __dict__（~64 bytes overhead）
-class PointDict:
-    def __init__(self, x: float, y: float) -> None:
-        self.x = x
-        self.y = y
-
-# __slots__ class：無 __dict__（節省 ~40-50%）
-class PointSlots:
-    __slots__ = ("x", "y")
-    def __init__(self, x: float, y: float) -> None:
-        self.x = x
-        self.y = y
-
-# 或用 dataclass + slots（Python 3.10+）
-from dataclasses import dataclass
-
-@dataclass(slots=True)
-class PointData:
-    x: float
-    y: float
-```
-
-### Pattern 3: 字串拼接優化
-
-**場景**：大量字串組合。
-
-```python
-# ❌ 慢：O(n²)
-result = ""
-for line in lines:
-    result += line + "\n"
-
-# ✅ 快：O(n)
-result = "\n".join(lines) + "\n"
-
-# ✅ 更快（寫入檔案時）
-with open("output.txt", "w") as f:
-    f.writelines(f"{line}\n" for line in lines)
-```
-
-### Pattern 4: LRU Cache 加速遞迴
-
-**場景**：重複計算的純函式。
+## Cache
 
 ```python
 from functools import lru_cache
 
-@lru_cache(maxsize=256)
-def fib(n: int) -> int:
-    if n < 2:
-        return n
-    return fib(n - 1) + fib(n - 2)
 
-# 查看快取統計
-print(fib.cache_info())
-# CacheInfo(hits=98, misses=101, maxsize=256, currsize=101)
+@lru_cache(maxsize=512)
+def parse_schema(schema_text: str) -> ParsedSchema:
+    return compile_schema(schema_text)
 ```
 
-### Pattern 5: Generator 節省記憶體
+使用 cache 前回答：
 
-**場景**：處理大資料集，不需一次載入全部。
+- key 是否完整且 hash 穩定？
+- 值是否可能過期？
+- 最大大小與 eviction 是什麼？
+- 是否含敏感或 tenant-specific 資料？
+- 多 process／多機器是否需要共享？
+- cache miss storm 如何處理？
 
-```python
-from collections.abc import Iterator
-from pathlib import Path
+不要 cache 有副作用、依時間/權限隱含變動或記憶體無上限的函式。
 
-def read_large_file(path: Path, chunk: int = 8192) -> Iterator[str]:
-    """逐行讀取大檔案，不載入整個檔案到記憶體"""
-    with open(path, encoding="utf-8") as f:
-        while True:
-            lines = f.readlines(chunk)
-            if not lines:
-                break
-            yield from lines
+## 並行與平行
 
-# 用法：記憶體用量恆定
-total = sum(1 for line in read_large_file(Path("huge.log"))
-            if "ERROR" in line)
-```
+| 工作型態 | 優先方向 |
+|---|---|
+| 大量 I/O 等待 | asyncio／有界 thread pool |
+| CPU-bound 純 Python | process pool、演算法或 native implementation |
+| 釋放 GIL 的 native code | thread pool 或 library 自身 parallelism |
+| 大型共享資料 | 避免昂貴 process serialization，評估 shared memory/native engine |
+| 多租戶服務 | 先處理 queue、backpressure 與資源隔離 |
 
-### Pattern 6: 並行加速 CPU-bound
+### Free-threaded Python
 
-**場景**：多核心平行計算。
+Python 3.14 提供可選 free-threaded build，但仍需：
 
-```python
-from concurrent.futures import ProcessPoolExecutor
-from math import isqrt
+- 驗證 native extensions 與 thread safety。
+- 比較一般 build、free-threaded、process pool 與 native library。
+- 量測單執行緒 overhead 與多核心 scaling。
+- 確認是否有 extension 在 runtime 重新啟用 GIL。
+- 對共享 mutable state 做壓力與 race 測試。
 
-def is_prime(n: int) -> bool:
-    if n < 2:
-        return False
-    for d in range(2, isqrt(n) + 1):
-        if n % d == 0:
-            return False
-    return True
+### Experimental JIT
 
-def count_primes(numbers: list[int]) -> int:
-    """利用多核平行判斷質數"""
-    with ProcessPoolExecutor() as pool:
-        results = pool.map(is_prime, numbers, chunksize=1000)
-    return sum(results)
-```
+CPython JIT 仍應視為實驗選項：
 
-## 工具鏈推薦
+- 不作生產預設。
+- benchmark 記錄 build 與啟用方式。
+- 觀察 warm-up、code shape 與 profiler 差異。
+- 沒有實測時不宣稱加速。
 
-| 工具 | 用途 | 安裝 | 備註 |
-|------|------|------|------|
-| cProfile | CPU 確定性 profiling | 標準函式庫 | 首選 |
-| Pyinstrument | 統計性 profiling | `pip install pyinstrument` | 樹狀報告 |
-| line_profiler | 行級 CPU profiling | `pip install line_profiler` | `@profile` 裝飾器 |
-| memory_profiler | 行級記憶體 profiling | `pip install memory_profiler` | 需搭配 psutil |
-| tracemalloc | 記憶體追蹤 | 標準函式庫 | 快照比較 |
-| py-spy | 低 overhead 取樣 | `pip install py-spy` | 可 attach 執行中程序 |
-| scalene | CPU+記憶體+GPU | `pip install scalene` | 全方位 |
-| memray | 記憶體視覺化 | `pip install memray` | Bloomberg 出品 |
+## Async 與服務效能
+
+- 區分 CPU time、wall time 與等待時間。
+- 觀察 event-loop lag、queue depth、pool wait、timeout 與 retry。
+- 無界 task/queue 可能短期提高吞吐、長期導致延遲與 OOM。
+- client disconnect 時取消上游工作，避免浪費資源。
+- 對 p50、p95、p99 分別量測，不以平均值掩蓋 tail latency。
+- load test 要有授權、固定流量模型與安全上限。
+
+## 效能回歸測試
+
+- 保存 benchmark 名稱、版本、輸入與所有樣本。
+- 將 correctness test 與 benchmark 分開。
+- 在穩定 runner 上執行主要 benchmark，普通 PR CI 只跑小型 smoke benchmark。
+- threshold 同時考慮絕對值與百分比，並允許合理噪音。
+- regression 發生時先重新量測，再 bisect commit/dependency。
+- 報告改善與退化的 trade-off，不只挑選最佳數字。
+
+## 交付標準
+
+- 效能目標、代表性 workload 與 baseline 已記錄。
+- correctness 在最佳化前後一致。
+- profiler 證據指向實際瓶頸，沒有猜測性重構。
+- benchmark 有多次樣本、環境、warm-up 與變異資訊。
+- 改善優先從演算法、I/O 與資料流著手。
+- 記憶體、CPU、延遲與吞吐 trade-off 已說明。
+- free-threaded/JIT 皆有 opt-in、相容性測試與 fallback。
+- 已建立可重現的 regression benchmark 與合理閾值。
 
 ## 延伸閱讀
 
-讀取 `references/` 目錄下的對應檔案：
-- `references/examples.md` — 完整可運行範例
-- `references/cheatsheet.md` — 速查表
-- `references/pitfalls.md` — 常見錯誤與解法
+- [完整範例](references/examples.md)
+- [速查表](references/cheatsheet.md)
+- [常見陷阱](references/pitfalls.md)
+- [Python profiling documentation](https://docs.python.org/3/library/profile.html)
+- [Free-threaded Python HOWTO](https://docs.python.org/3/howto/free-threading-python.html)
 
 ## 版本相容性
 
-| Python 版本 | 支援狀態 | 備註 |
-|-------------|----------|------|
-| 3.13+ | ✅ 完整支援 | free-threaded 模式下 profiling 可能不同 |
-| 3.12 | ✅ | 支援 Linux `perf` profiler |
-| 3.11 | ✅ | CPython 10-60% 加速 |
-| 3.10 | ✅ | `dataclass(slots=True)` |
+| 環境 | 建議 |
+|---|---|
+| Python 3.14 | 穩定維護基準；free-threaded 可選，JIT 仍實驗性 |
+| Python 3.10–3.13 | 支援；記錄不同 interpreter/build 的結果 |
+| Native/GPU workloads | 使用對應 profiler，不只看 Python allocation |
+| Preview Python | 只作獨立比較，不取代穩定 benchmark |
