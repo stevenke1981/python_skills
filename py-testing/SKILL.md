@@ -1,332 +1,276 @@
 ---
 name: py-testing
 description: >
-  Python testing and quality assurance with pytest ecosystem.
-  Trigger when user mentions pytest, unit test, integration test,
-  test fixtures, parametrize, test coverage, mocking, hypothesis,
-  property-based testing, mutation testing, conftest, TDD, test-driven.
-  Also trigger when user asks about testing best practices,
-  test architecture, or how to write reliable Python tests.
+  Design, implement, and repair Python test suites with pytest, fixtures, parametrization, mocks, fakes, property-based testing, async tests, integration tests, contract tests, coverage, flaky-test diagnosis, and CI quality gates. Use when adding tests, reviewing test architecture, reproducing bugs, validating migrations, or making Python behavior deterministic and regression-safe.
+compatibility: Agent Skills-compatible. pytest 9 supports Python 3.10+; inspect the project's pinned pytest and plugin versions before using newer APIs.
+metadata:
+  author: stevenke1981
+  version: "2.0.0"
+  last-reviewed: "2026-07-30"
 ---
 
-# Python 測試與品質保證
+# Python 測試工程
 
-## Quick Start（30 秒上手）
+## 目標與邊界
 
-```python
-# test_calculator.py
-import pytest
+用此 skill 建立快速、穩定、能說明行為契約的測試。測試重點是防止有意義的回歸，不是追求單一 coverage 百分比或對每一行實作做鏡像斷言。
 
-def add(a: int, b: int) -> int:
-    return a + b
+若任務主要是實作功能，仍以對應領域 skill 為主，`py-testing` 負責測試策略與品質閘門。
 
-# 基本測試
-def test_add_positive():
-    assert add(2, 3) == 5
+## 執行流程
 
-# 參數化：一次跑多組輸入
-@pytest.mark.parametrize("a, b, expected", [
-    (1, 2, 3),
-    (-1, 1, 0),
-    (0, 0, 0),
-])
-def test_add_parametrize(a: int, b: int, expected: int):
-    assert add(a, b) == expected
-```
+1. **先重現問題或行為**：建立最小失敗案例，記錄輸入、環境與期望。
+2. **辨識測試層級**：unit、component、integration、contract、end-to-end 或 performance。
+3. **選擇穩定邊界**：優先測 public behavior；只有必要時才測內部細節。
+4. **控制非決定性**：時間、亂數、網路、檔案、環境變數、locale、timezone 與並行。
+5. **建立代表性案例**：正常、邊界、錯誤、空值、極端值、權限與故障注入。
+6. **執行最小到完整套件**：先單一測試，再目錄，最後完整 CI matrix。
+7. **檢查測試品質**：避免過度 mock、共享狀態、順序依賴與無條件重跑。
+8. **回報驗證範圍**：列出執行命令、通過結果、未覆蓋環境與已知限制。
 
-```bash
-# 執行
-pytest test_calculator.py -v
-```
+## 測試層級
 
-## 核心概念
+| 層級 | 驗證內容 | 典型特性 |
+|---|---|---|
+| Unit | 純函式、domain rule、parser | 快、隔離、數量多 |
+| Component | 一個模組或 service + fake boundary | 驗證協作但仍可控 |
+| Integration | DB、filesystem、message broker、HTTP adapter | 真實依賴與 lifecycle |
+| Contract | client/server、schema、provider adapter | 防止介面漂移 |
+| End-to-end | 完整使用者流程 | 數量少、成本高 |
+| Property-based | 不變量與廣泛輸入空間 | 找到人工案例之外的錯誤 |
+| Performance | 延遲、吞吐、記憶體回歸 | 需穩定環境與統計方法 |
 
-### 1. Fixtures — 測試的骨架
+不要把所有測試都做成 E2E，也不要用 mock 讓 integration test 失去整合意義。
 
-Fixtures 提供可重用的前置設定與清理邏輯，透過依賴注入自動傳入測試函式。
-
-```python
-import pytest
-from pathlib import Path
-
-@pytest.fixture
-def sample_data() -> dict[str, list[int]]:
-    """提供測試用範例資料"""
-    return {"values": [1, 2, 3, 4, 5], "empty": []}
-
-@pytest.fixture
-def tmp_config(tmp_path: Path) -> Path:
-    """建立暫時設定檔（pytest 內建 tmp_path）"""
-    config = tmp_path / "config.toml"
-    config.write_text('[app]\ndebug = true\n')
-    return config
-
-def test_data_sum(sample_data: dict[str, list[int]]):
-    assert sum(sample_data["values"]) == 15
-
-def test_config_exists(tmp_config: Path):
-    assert tmp_config.exists()
-    assert "debug" in tmp_config.read_text()
-```
-
-**Fixture Scope**：控制生命週期
-
-| Scope | 說明 | 典型用途 |
-|-------|------|----------|
-| `function` | 每個測試函式（預設） | 資料隔離 |
-| `class` | 每個測試類別 | 類別級共用資源 |
-| `module` | 每個 .py 檔 | DB 連線 |
-| `session` | 整個測試 session | 全域設定 |
-
-### 2. Parametrize — 資料驅動測試
-
-用 `@pytest.mark.parametrize` 將多組測試資料解耦出來。
-
-```python
-import pytest
-
-def is_palindrome(s: str) -> bool:
-    cleaned = s.lower().replace(" ", "")
-    return cleaned == cleaned[::-1]
-
-@pytest.mark.parametrize("text, expected", [
-    ("racecar", True),
-    ("hello", False),
-    ("A man a plan a canal Panama", True),
-    ("", True),
-], ids=["simple", "not_palindrome", "sentence", "empty"])
-def test_palindrome(text: str, expected: bool):
-    assert is_palindrome(text) == expected
-```
-
-### 3. Mocking — 隔離外部依賴
-
-```python
-from unittest.mock import patch, MagicMock
-import pytest
-
-# 被測函式
-def fetch_user(user_id: int) -> dict:
-    import httpx
-    resp = httpx.get(f"https://api.example.com/users/{user_id}")
-    resp.raise_for_status()
-    return resp.json()
-
-def test_fetch_user():
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"id": 1, "name": "Alice"}
-    mock_response.raise_for_status.return_value = None
-
-    with patch("httpx.get", return_value=mock_response) as mock_get:
-        result = fetch_user(1)
-        assert result["name"] == "Alice"
-        mock_get.assert_called_once_with("https://api.example.com/users/1")
-```
-
-### 4. Hypothesis — 屬性基底測試
-
-讓 Hypothesis 自動產生大量隨機測試資料，發現手動想不到的邊界情況。
-
-```python
-from hypothesis import given, strategies as st
-
-def encode_decode(s: str) -> str:
-    return s.encode("utf-8").decode("utf-8")
-
-@given(st.text())
-def test_encode_decode_roundtrip(s: str):
-    """編碼再解碼必定還原"""
-    assert encode_decode(s) == s
-
-@given(st.lists(st.integers(), min_size=1))
-def test_sorted_is_ordered(lst: list[int]):
-    result = sorted(lst)
-    for i in range(len(result) - 1):
-        assert result[i] <= result[i + 1]
-```
-
-### 5. Coverage — 測試覆蓋率
-
-```bash
-# 安裝
-pip install pytest-cov
-
-# 執行並產出覆蓋率報告
-pytest --cov=src --cov-report=term-missing --cov-fail-under=80
-
-# HTML 報告
-pytest --cov=src --cov-report=html
-```
-
-**pyproject.toml 設定**：
+## pytest 基本設定
 
 ```toml
 [tool.pytest.ini_options]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
 testpaths = ["tests"]
-addopts = "-ra -q --strict-markers"
+xfail_strict = true
 markers = [
-    "slow: 執行時間較長的測試",
-    "integration: 整合測試",
-]
-
-[tool.coverage.run]
-source = ["src"]
-branch = true
-
-[tool.coverage.report]
-fail_under = 80
-show_missing = true
-exclude_lines = [
-    "if TYPE_CHECKING:",
-    "if __name__ == .__main__.",
+  "integration: requires real infrastructure or service fixtures",
+  "slow: intentionally slower validation",
 ]
 ```
 
-## 實戰 Patterns
+`strict` 模式可提早發現拼錯 marker 或設定。CI 不應依賴開發者本機自動載入的未知 plugin。
 
-### Pattern 1: conftest.py 分層組織
-
-**場景**：大型專案需要不同層級的共用 fixtures。
-
-```
-tests/
-├── conftest.py              # session-level fixtures（DB 連線等）
-├── unit/
-│   ├── conftest.py          # unit test 共用 fixtures
-│   └── test_models.py
-├── integration/
-│   ├── conftest.py          # integration fixtures（HTTP client 等）
-│   └── test_api.py
-└── e2e/
-    └── test_flows.py
-```
-
-```python
-# tests/conftest.py
-import pytest
-
-@pytest.fixture(scope="session")
-def db_url() -> str:
-    return "sqlite:///test.db"
-
-# tests/unit/conftest.py
-import pytest
-
-@pytest.fixture
-def mock_repo():
-    """單元測試用的 mock repository"""
-    from unittest.mock import MagicMock
-    return MagicMock()
-```
-
-### Pattern 2: Factory Fixtures
-
-**場景**：需要在單一測試中建立多個不同參數的物件。
+## 清楚的行為測試
 
 ```python
 import pytest
+
+
+def calculate_discount(total: int, rate: float) -> int:
+    if total < 0:
+        raise ValueError("total must be non-negative")
+    if not 0.0 <= rate <= 1.0:
+        raise ValueError("rate must be between 0 and 1")
+    return round(total * rate)
+
+
+@pytest.mark.parametrize(
+    ("total", "rate", "expected"),
+    [
+        (1_000, 0.1, 100),
+        (0, 0.5, 0),
+        (999, 0.0, 0),
+    ],
+)
+def test_calculate_discount(
+    total: int,
+    rate: float,
+    expected: int,
+) -> None:
+    assert calculate_discount(total, rate) == expected
+
+
+@pytest.mark.parametrize(
+    ("total", "rate"),
+    [(-1, 0.1), (100, -0.1), (100, 1.1)],
+)
+def test_calculate_discount_rejects_invalid_input(
+    total: int,
+    rate: float,
+) -> None:
+    with pytest.raises(ValueError):
+        calculate_discount(total, rate)
+```
+
+斷言 observable outcome、exception type 與必要訊息，不要對每一步內部呼叫順序做脆弱斷言。
+
+## Fixture 設計
+
+- fixture 只負責建立可重用測試資源，不隱藏主要 Arrange 行為。
+- scope 越大，共享狀態與順序依賴風險越高。
+- resource fixture 使用 `yield` 確保 teardown。
+- factory fixture 適合產生多種資料，但要有明確型別。
+- 使用 `tmp_path`、`monkeypatch` 與 framework 提供的 lifecycle fixture。
+- 不在 import time 建立資料庫、client 或 event loop。
+
+```python
+from collections.abc import Callable
 from dataclasses import dataclass
 
-@dataclass(frozen=True)
+import pytest
+
+
+@dataclass(frozen=True, slots=True)
 class User:
     name: str
-    age: int
-    active: bool = True
+    active: bool
+
 
 @pytest.fixture
-def make_user():
-    """工廠 fixture — 每次呼叫建立新 User"""
-    created: list[User] = []
+def user_factory() -> Callable[..., User]:
+    def make_user(
+        *,
+        name: str = "Alice",
+        active: bool = True,
+    ) -> User:
+        return User(name=name, active=active)
 
-    def _make(name: str = "Test", age: int = 25, active: bool = True) -> User:
-        user = User(name=name, age=age, active=active)
-        created.append(user)
-        return user
-
-    yield _make
-    # teardown: 清理（若有 DB 則刪除記錄）
-
-def test_multiple_users(make_user):
-    admin = make_user("Admin", 30)
-    guest = make_user("Guest", 18, active=False)
-    assert admin.active is True
-    assert guest.active is False
+    return make_user
 ```
 
-### Pattern 3: 非同步測試 (pytest-asyncio)
+## Mock、Fake 與 Stub
 
-**場景**：測試 async 函式。
+### 優先順序
+
+1. 純值與真實 domain object
+2. 小型 in-memory fake
+3. local test server / containerized dependency
+4. mock 外部邊界
+
+規則：
+
+- patch 使用物件被查找的位置，不是原始定義位置。
+- mock clock、random、HTTP transport、email sender 等 boundary。
+- 不 mock 被測函式自己的核心邏輯。
+- 對重要 adapter 增加 contract test，防止 fake 與真實服務漂移。
+- 使用 autospec/spec_set 可降低不存在屬性的假通過，但仍不能取代 integration test。
+
+## 時間、亂數與環境
+
+- 將 clock 與 random generator 注入，而不是到處呼叫全域函式。
+- 測試固定 timezone 與 locale，並加入 DST/日期邊界案例。
+- 使用 seeded randomness，但失敗時輸出 seed。
+- 每個測試自行設定環境變數並復原。
+- 不依賴目前工作目錄、使用者家目錄或測試執行順序。
+
+## Async 測試
+
+- 使用與專案相容的 async pytest plugin 或測試 runner。
+- 每個測試結束檢查未完成 task、未關閉 client 與 resource warning。
+- 不用真實 `sleep()` 等待背景工作；使用 event、queue 或可控 clock。
+- 測 cancellation、timeout、partial failure、slow consumer 與 graceful shutdown。
+- 對 client disconnect 驗證上游工作真的取消。
 
 ```python
-import pytest
 import asyncio
 
-async def async_fetch(url: str) -> str:
-    await asyncio.sleep(0.01)  # 模擬 IO
-    return f"response from {url}"
-
-@pytest.mark.asyncio
-async def test_async_fetch():
-    result = await async_fetch("https://example.com")
-    assert "example.com" in result
-```
-
-**pyproject.toml**：
-```toml
-[tool.pytest-asyncio]
-mode = "auto"  # 自動偵測 async 測試，不需每個都加 mark
-```
-
-### Pattern 4: Snapshot / Approval Testing
-
-**場景**：驗證輸出結構（JSON、HTML、報表）不意外改變。
-
-```python
-# 需安裝 pytest-snapshot 或 syrupy
 import pytest
 
-def generate_report(data: list[int]) -> dict:
-    return {
-        "count": len(data),
-        "sum": sum(data),
-        "mean": sum(data) / len(data) if data else 0,
-    }
 
-def test_report_snapshot(snapshot):
-    result = generate_report([10, 20, 30])
-    assert result == snapshot
-    # 首次執行：pytest --snapshot-update 產生基準
-    # 後續執行：自動比對
+@pytest.mark.asyncio
+async def test_worker_honors_cancellation() -> None:
+    started = asyncio.Event()
+
+    async def worker() -> None:
+        started.set()
+        await asyncio.Future()
+
+    task = asyncio.create_task(worker())
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 ```
 
-## 工具鏈推薦
+plugin marker/mode 依鎖定版本設定，不要複製不相容的網路範例。
 
-| 工具 | 用途 | 安裝 | 備註 |
-|------|------|------|------|
-| pytest | 測試框架核心 | `pip install pytest` | 必備 |
-| pytest-cov | 覆蓋率 | `pip install pytest-cov` | 搭配 coverage.py |
-| pytest-asyncio | async 測試 | `pip install pytest-asyncio` | auto mode 推薦 |
-| pytest-xdist | 平行執行 | `pip install pytest-xdist` | `pytest -n auto` |
-| hypothesis | 屬性基底測試 | `pip install hypothesis` | 自動產生測試資料 |
-| pytest-mock | mock 輔助 | `pip install pytest-mock` | 提供 `mocker` fixture |
-| syrupy | Snapshot 測試 | `pip install syrupy` | 取代 pytest-snapshot |
-| mutmut | 突變測試 | `pip install mutmut` | 驗證測試品質 |
-| factory-boy | 工廠模式 | `pip install factory-boy` | Django/SQLAlchemy 整合 |
-| freezegun | 時間凍結 | `pip install freezegun` | 測試時間相關邏輯 |
+## Property-based Testing
+
+適合：
+
+- parser/serializer round trip
+- 排序、去重與集合不變量
+- 金額、日期與區間邊界
+- protocol frame 與 malformed input
+- schema migration
+
+範例不變量：
+
+- encode 後 decode 等於原始資料。
+- normalize 執行兩次等於一次。
+- filter 不會增加列數。
+- 聚合後總額與來源 reconciliation 一致。
+
+保留 framework 回報的最小反例，並在修復後加入 regression case。
+
+## Integration 與 Contract Tests
+
+- 使用 ephemeral database/schema、temporary directory 或受控 container。
+- migration 從空資料庫與前一正式版本都要測。
+- HTTP 測 status、headers、schema、auth、timeout 與 retry，而不只 body happy path。
+- provider adapter 對 request/response mapping 建立 contract fixtures。
+- 測試資料不得包含真實 token、個資或生產快照中的機密。
+- live external test 應 opt-in，且有成本與速率限制。
+
+## Flaky Test 處理
+
+不要直接加入 rerun 後忽略。
+
+1. 收集失敗 seed、順序、worker、OS、Python、時區與資源資訊。
+2. 單獨重跑並使用隨機順序重現。
+3. 檢查共享狀態、固定 port、真實時間、thread/task leak 與 eventual consistency。
+4. 修正同步條件或隔離資源。
+5. 若必須 quarantine，設定 owner、原因與到期日。
+
+## Coverage 與品質閘門
+
+- 使用 branch coverage，但不要只追求單一百分比。
+- 高風險 path、錯誤處理與權限邊界比簡單 getter 更重要。
+- 新 bug 必須先有失敗 regression test。
+- 可對核心純邏輯使用 mutation testing 評估斷言強度。
+- 慢測試分類並定期執行，不要永久從 CI 消失。
+
+常用命令：
+
+```bash
+pytest -q
+pytest tests/unit -q
+pytest -m "not slow" -q
+pytest --cov=src --cov-branch --cov-report=term-missing
+```
+
+## 交付標準
+
+- 測試驗證 public behavior 與重要不變量，不鏡像實作細節。
+- 時間、亂數、網路、檔案與環境等非決定性已受控。
+- fixture 有清楚 scope、型別與 teardown。
+- mock 限於 boundary，重要 adapter 有 integration/contract test。
+- async 測試涵蓋取消、逾時與資源關閉。
+- flaky test 有根因處理，不以無限 rerun 掩蓋。
+- CI 命令、marker、coverage 與支援 Python matrix 已記錄。
+- 測試失敗能提供可重現的輸入與環境資訊。
 
 ## 延伸閱讀
 
-讀取 `references/` 目錄下的對應檔案：
-- `references/examples.md` — 完整可運行範例
-- `references/cheatsheet.md` — 速查表
-- `references/pitfalls.md` — 常見錯誤與解法
+- [完整範例](references/examples.md)
+- [速查表](references/cheatsheet.md)
+- [常見陷阱](references/pitfalls.md)
+- [pytest documentation](https://docs.pytest.org/en/stable/)
 
 ## 版本相容性
 
-| Python 版本 | 支援狀態 | 備註 |
-|-------------|----------|------|
-| 3.13+ | ✅ 完整支援 | pytest 8.x |
-| 3.12 | ✅ 完整支援 | |
-| 3.11 | ✅ | |
-| 3.10 | ✅ | pytest 8.x 最低要求 |
-| 3.9 | ⚠️ | pytest 8.x 仍支援但將淘汰 |
+| 環境 | 建議 |
+|---|---|
+| Python 3.14 | 穩定維護基準；確認 coverage、async 與 native plugin |
+| Python 3.10–3.13 | 支援；依 pytest/plugin lockfile 選 API |
+| pytest 9.x | Python 3.10+；升級時檢查 collection 與 plugin 相容性 |
+| 舊 pytest | 先讀 changelog/deprecations，不直接套用 9.x 設定 |
+| Preview Python | 只作 compatibility job，不取代穩定 CI |
