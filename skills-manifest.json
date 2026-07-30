@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "reviewed_at": "2026-07-30",
+  "python_policy": {
+    "stable_baseline": "3.14",
+    "preview_only": "3.15",
+    "rule": "Honor each target project's declared minimum Python version before using newer syntax or APIs."
+  },
+  "skills": [
+    {
+      "name": "py-modern",
+      "path": "py-modern",
+      "category": "language",
+      "minimum_python": "3.12",
+      "status": "maintained"
+    },
+    {
+      "name": "py-async",
+      "path": "py-async",
+      "category": "concurrency",
+      "minimum_python": "3.11",
+      "status": "maintained"
+    },
+    {
+      "name": "py-data",
+      "path": "py-data",
+      "category": "data",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-testing",
+      "path": "py-testing",
+      "category": "quality",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-packaging",
+      "path": "py-packaging",
+      "category": "tooling",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-patterns",
+      "path": "py-patterns",
+      "category": "architecture",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-cli",
+      "path": "py-cli",
+      "category": "application",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-perf",
+      "path": "py-perf",
+      "category": "performance",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-ai",
+      "path": "py-ai",
+      "category": "ai",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-web",
+      "path": "py-web",
+      "category": "web",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-gui",
+      "path": "py-gui",
+      "category": "desktop",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    },
+    {
+      "name": "py-network",
+      "path": "py-network",
+      "category": "networking",
+      "minimum_python": "3.10",
+      "status": "maintained"
+    }
+  ]
+}

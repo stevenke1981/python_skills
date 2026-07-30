@@ -1,267 +1,182 @@
 ---
 name: py-modern
 description: >
-  Python 3.12+ and 3.13+ modern syntax, features, and best practices.
-  Trigger when user mentions match-case, structural pattern matching,
-  type hints, PEP 695, type parameter syntax, f-string improvements,
-  GIL-free, free-threaded Python, PEP 701, modern Python syntax,
-  Python 3.12 new features, Python 3.13 new features, type alias,
-  TypeVar new syntax, walrus operator, exception groups.
-  Also trigger when user asks about upgrading to Python 3.12+,
-  migrating legacy code to modern Python, or writing idiomatic
-  modern Python.
+  Modernize Python projects and choose version-appropriate language features. Use for Python 3.12, 3.13, or 3.14 upgrades, PEP 695 generics, typing improvements, deferred annotations, template strings, free-threaded CPython, experimental JIT evaluation, deprecation cleanup, and migration from legacy syntax while preserving compatibility.
+compatibility: Agent Skills-compatible. Inspect the target project's requires-python and CI matrix before using version-specific syntax.
+metadata:
+  author: stevenke1981
+  version: "2.0.0"
+  last-reviewed: "2026-07-30"
 ---
 
-# Python 3.12+ / 3.13+ 現代語法與特性
+# Python 現代化與版本遷移
 
-## Quick Start（30 秒上手）
+## 目標與邊界
 
-```python
-# Python 3.12+ 新型態參數語法（PEP 695）
-type Point = tuple[float, float]
+用此 skill 升級 Python 版本、導入現代語法、改善 typing，並在不破壞既有行為的前提下移除過時寫法。
 
-def first[T](items: list[T]) -> T:
-    """回傳列表中的第一個元素"""
-    return items[0]
+不要因為某功能存在於最新版 Python，就直接套用到最低版本較舊的專案。若任務主要是依賴、wheel、PyPI 或鎖定檔，改以 `py-packaging` 為主。
 
-class Stack[T]:
-    """泛型堆疊"""
-    def __init__(self) -> None:
-        self._items: list[T] = []
+## 執行流程
 
-    def push(self, item: T) -> None:
-        self._items.append(item)
+1. **盤點版本契約**：讀取 `pyproject.toml`、`.python-version`、Dockerfile、CI matrix、type checker 與部署環境。
+2. **建立行為基準**：先執行測試；缺少測試時，為公開 API、序列化格式與 CLI 行為補 characterization tests。
+3. **選擇最低語法版本**：以實際 `requires-python` 為準，不以開發機版本為準。
+4. **分批遷移**：先處理 deprecation 與相容性，再導入新語法，最後才評估 free-threaded 或 JIT。
+5. **執行靜態與動態驗證**：至少執行 compile、lint、type check、test 與目標版本矩陣。
+6. **記錄破壞性變更**：列出升級前置條件、回復方式與仍未驗證的第三方套件。
 
-    def pop(self) -> T:
-        return self._items.pop()
+## 版本決策指南
 
-stack = Stack[int]()
-stack.push(42)
-print(first([1, 2, 3]))  # 1
-```
+| 功能 | 起始版本 | 使用原則 |
+|---|---:|---|
+| `match` / `case` | 3.10 | 僅在結構化模式比 `if/elif` 更清楚時使用 |
+| `TaskGroup`, `ExceptionGroup` | 3.11 | 非同步工作優先讀 `py-async` |
+| PEP 695 型別參數與 `type` alias | 3.12 | 套件若仍支援 3.11，不可直接採用 |
+| PEP 701 f-string 文法 | 3.12 | 保持可讀性，不把複雜邏輯塞入 f-string |
+| `typing.override` | 3.12 | 建議搭配 pyright 或 mypy 驗證 |
+| `TypeIs`, `ReadOnly`, TypeVar defaults | 3.13 | 確認 type checker 已支援 |
+| deferred annotations 新語意 | 3.14 | 升級時測試 runtime annotation introspection |
+| template strings（t-strings） | 3.14 | 需要安全插值處理時才採用，不能把它當自動防注入 |
+| multiple interpreters 標準 API | 3.14 | 先驗證 extension 與共享狀態相容性 |
+| free-threaded CPython | 3.14 正式支援但仍為可選 build | 僅在依賴相容且 benchmark 證明有益時採用 |
+| CPython JIT | 3.14 仍屬實驗性 | 不作為生產預設，也不宣稱必然加速 |
 
-## 核心概念
+Python 3.15 預覽功能只能放在實驗分支或明確 opt-in，不得成為預設交付基準。
 
-### 1. PEP 695 — 型別參數語法（Python 3.12+）
+## 現代型別語法
 
-取代冗長的 `TypeVar` 宣告，新語法更簡潔，且 variance 自動推斷。
-
-```python
-# 舊方式（3.11 以前）
-from typing import TypeVar, Generic
-_T = TypeVar("_T")
-class Container(Generic[_T]):
-    def get(self) -> _T: ...
-
-# 新方式（3.12+）——無需匯入 TypeVar 或 Generic
-class Container[T]:
-    def get(self) -> T: ...
-
-# 泛型函式
-def max_item[T: (int, float, str)](items: list[T]) -> T:
-    return max(items)
-
-# 泛型型別別名
-type ListOrSet[T] = list[T] | set[T]
-```
-
-### 2. PEP 701 — f-string 完整解放（Python 3.12+）
-
-f-string 現在是正式文法的一部分，解除所有舊限制。
+### Python 3.12+ 泛型
 
 ```python
-# 可在 f-string 內使用相同引號
-songs = ["Eden", "Alkaline"]
-print(f"Playlist: {", ".join(songs)}")
+from collections.abc import Iterable
 
-# 多行表達式 + 註解
-result = f"Total: {
-    sum([1, 2, 3])  # 這裡可以放註解
-}"
 
-# 反斜線與 Unicode 跳脫
-print(f"Songs:\n{"\n".join(songs)}")
-print(f"Heart: {"\N{BLACK HEART SUIT}"}")
+type Result[T] = tuple[T | None, Exception | None]
+
+
+def first[T](items: Iterable[T]) -> T:
+    for item in items:
+        return item
+    raise ValueError("items must not be empty")
 ```
 
-### 3. Structural Pattern Matching（Python 3.10+，持續進化）
+若套件仍支援 Python 3.11，改用 `TypeVar` 與傳統 alias，不要在執行時用條件分支包住無法解析的新語法；舊直譯器會在載入檔案前就發生 `SyntaxError`。
 
-match-case 是 Python 的模式比對語法，類似其他語言的 switch-case 但更強大。
+### `override` 驗證繼承契約
 
 ```python
-from dataclasses import dataclass
+from typing import override
 
-@dataclass
-class Point:
-    x: float
-    y: float
 
-def describe(obj: object) -> str:
-    """使用 match-case 做結構化模式比對"""
-    match obj:
-        case Point(x=0, y=0):
-            return "原點"
-        case Point(x, y) if x == y:
-            return f"對角線上 ({x}, {y})"
-        case Point(x, y):
-            return f"點 ({x}, {y})"
-        case [*items] if len(items) > 3:
-            return f"長序列，共 {len(items)} 項"
-        case {"action": "buy", "item": str(name)}:
-            return f"購買 {name}"
-        case _:
-            return "未知"
+class BaseExporter:
+    def export(self, value: object) -> str:
+        raise NotImplementedError
+
+
+class JsonExporter(BaseExporter):
+    @override
+    def export(self, value: object) -> str:
+        import json
+
+        return json.dumps(value, ensure_ascii=False)
 ```
 
-### 4. Free-threaded Python / GIL-free（Python 3.13+，實驗性）
+## Python 3.14 遷移注意事項
 
-Python 3.13 引入實驗性的 free-threaded 模式（PEP 703），允許真正的多執行緒並行。
+### Deferred annotations
+
+- 搜尋 `__annotations__`、`typing.get_type_hints()`、dataclass、Pydantic、ORM 與自製 decorator 的 runtime introspection。
+- 不要假設 annotation 在函式定義當下已求值。
+- 對 forward reference、區域名稱、decorator 執行順序與 import cycle 補測試。
+- 升級前先更新依賴，再移除不再需要的 workaround。
+
+### Free-threaded 執行環境
+
+先辨識 build 與 runtime 狀態：
 
 ```python
 import sys
-import threading
+import sysconfig
 
-# 檢查是否為 free-threaded 版本
-if hasattr(sys, "_is_gil_enabled"):
-    print(f"GIL 啟用: {sys._is_gil_enabled()}")
 
-# 在 free-threaded 模式下，多執行緒可真正平行執行
-def cpu_work(n: int) -> int:
-    """CPU 密集任務"""
-    return sum(i * i for i in range(n))
+built_without_gil = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+runtime_gil_enabled = (
+    sys._is_gil_enabled() if hasattr(sys, "_is_gil_enabled") else True
+)
 
-threads: list[threading.Thread] = []
-for _ in range(4):
-    t = threading.Thread(target=cpu_work, args=(10_000_000,))
-    threads.append(t)
-    t.start()
-for t in threads:
-    t.join()
+print({
+    "free_threaded_build": built_without_gil,
+    "gil_enabled_now": runtime_gil_enabled,
+})
 ```
 
-### 5. typing 模組新增特性
+導入前必須：
 
-```python
-from typing import TypeIs, ReadOnly, TypedDict, override, deprecated
-from warnings import deprecated as warn_deprecated
+1. 確認 C extension、NumPy、資料庫 driver 與 native library 支援狀態。
+2. 執行 thread sanitizer 或壓力測試可涵蓋的共享狀態。
+3. 比較一般 build、free-threaded build、process pool 與 async I/O。
+4. 若 extension 會重新啟用 GIL，清楚記錄並保留 fallback。
 
-# PEP 742: TypeIs（3.13+）——更直覺的型別窄化
-def is_str_list(val: list[object]) -> TypeIs[list[str]]:
-    return all(isinstance(x, str) for x in val)
+### Experimental JIT
 
-# PEP 705: ReadOnly TypedDict（3.13+）
-class Config(TypedDict):
-    name: str
-    debug: ReadOnly[bool]  # 型別檢查器會禁止修改
+- 只在可重現 benchmark 中測試。
+- 同時記錄 interpreter build、環境變數、warm-up、輸入資料與 profiler 限制。
+- 不把單一 microbenchmark 結果外推到整個應用。
+- 生產部署預設保持關閉，除非專案已有明確驗證與回復方案。
 
-# PEP 698: @override 裝飾器（3.12+）
-class Base:
-    def method(self) -> None: ...
+## 遷移策略
 
-class Child(Base):
-    @override
-    def method(self) -> None:  # 若父類別無此方法會報錯
-        ...
+### 應用程式
 
-# PEP 702: @deprecated（3.13+）
-@warn_deprecated("使用 new_func() 代替")
-def old_func() -> None: ...
+- 可一次提高最低 Python 版本，但先驗證作業系統、容器與部署平台。
+- 鎖定依賴並建立完整回歸測試。
+- 用 feature flag 隔離風險較高的新 runtime 功能。
+
+### 可發布套件
+
+- 先決定真正需要支援的最低版本。
+- 使用 CI matrix 驗證每個宣告版本。
+- 新語法必須與 wheel/sdist 的 `Requires-Python` 一致。
+- 若要同時支援舊版，避免讓舊版 parser 看見新語法。
+
+## 驗證命令
+
+依專案工具調整：
+
+```bash
+python -m compileall src tests
+ruff check .
+ruff format --check .
+pyright
+pytest -q
 ```
 
-## 實戰 Patterns
+多版本測試可使用 tox、nox、uv 或 CI matrix；不得只在目前 shell 的 Python 上驗證。
 
-### Pattern 1: 用新語法重寫泛型容器
+## 交付標準
 
-**場景**：需要定義型別安全的泛型容器
-**程式碼**：
-
-```python
-from collections.abc import Iterator
-
-class Registry[K, V]:
-    """型別安全的註冊表"""
-    def __init__(self) -> None:
-        self._store: dict[K, V] = {}
-
-    def register(self, key: K, value: V) -> None:
-        self._store[key] = value
-
-    def get(self, key: K) -> V | None:
-        return self._store.get(key)
-
-    def __iter__(self) -> Iterator[tuple[K, V]]:
-        yield from self._store.items()
-
-# 使用
-reg = Registry[str, int]()
-reg.register("age", 30)
-```
-
-**注意**：PEP 695 語法不能與傳統 `TypeVar` 混用。
-
-### Pattern 2: copy.replace() 不可變更新（3.13+）
-
-**場景**：建立不可變物件的修改副本
-**程式碼**：
-
-```python
-from copy import replace
-from dataclasses import dataclass
-
-@dataclass(frozen=True)
-class Settings:
-    host: str = "localhost"
-    port: int = 8080
-    debug: bool = False
-
-# 建立修改副本，原物件不變
-base = Settings()
-dev = replace(base, debug=True, port=3000)
-print(dev)  # Settings(host='localhost', port=3000, debug=True)
-```
-
-**注意**：自定義類別需實作 `__replace__()` 方法。
-
-### Pattern 3: TypeVar 預設值（3.13+）
-
-**場景**：泛型參數需要預設型別
-
-```python
-from typing import TypeVar
-
-# PEP 696: TypeVar 支援預設值（3.13+）
-T = TypeVar("T", default=int)
-
-class Container[T = int]:
-    def __init__(self, value: T) -> None:
-        self.value = value
-
-c1 = Container(42)      # Container[int]
-c2 = Container("hello") # Container[str]
-```
-
-## 工具鏈推薦
-
-| 工具 | 用途 | 安裝 | 備註 |
-|------|------|------|------|
-| ruff | Linter + Formatter | `pip install ruff` | 取代 black + isort + flake8 |
-| mypy | 靜態型別檢查 | `pip install mypy` | 支援所有新語法 |
-| pyright | 型別檢查 (LSP) | `pip install pyright` | 由 Microsoft 維護，速度快 |
-| basedpyright | 增強版 pyright | `pip install basedpyright` | 更嚴格的檢查 |
-| uv | 套件管理器 | `pip install uv` | 極速套件安裝與虛擬環境 |
+- 明確列出升級前後的最低 Python 版本。
+- 新語法與 `Requires-Python`、CI matrix 一致。
+- runtime annotation、序列化與公開 API 行為已有回歸測試。
+- free-threaded 或 JIT 方案附 benchmark、依賴相容性與 fallback。
+- 沒有用未量測的倍數宣稱效能改善。
+- 預覽功能均為 opt-in，且不影響穩定路徑。
 
 ## 延伸閱讀
 
-讀取 `references/` 目錄下的對應檔案：
-- `references/examples.md` — 完整可運行範例
-- `references/cheatsheet.md` — 速查表
-- `references/pitfalls.md` — 常見錯誤與解法
+- [完整範例](references/examples.md)
+- [速查表](references/cheatsheet.md)
+- [常見陷阱](references/pitfalls.md)
+- [Python 3.14 What's New](https://docs.python.org/3/whatsnew/3.14.html)
+- [Free-threaded Python HOWTO](https://docs.python.org/3/howto/free-threading-python.html)
 
 ## 版本相容性
 
-| Python 版本 | 支援狀態 | 備註 |
-|-------------|----------|------|
-| 3.13+ | ✅ 完整支援 | free-threaded, TypeIs, ReadOnly, TypeVar defaults, JIT |
-| 3.12 | ✅ 完整支援 | PEP 695 型別參數語法, PEP 701 f-string, @override |
-| 3.11 | ⚠️ 部分 | ExceptionGroup, match-case (3.10+), 無新型別語法 |
-| 3.10 | ⚠️ 基礎 | match-case, `X | Y` union 語法 |
+| Python | 此 skill 的建議 |
+|---|---|
+| 3.14 | 穩定維護基準；free-threaded 可選，JIT 仍為實驗性 |
+| 3.13 | 支援；free-threaded 屬較早階段，需更保守驗證 |
+| 3.12 | 支援 PEP 695、PEP 701 與 `override` |
+| 3.10–3.11 | 可協助遷移，但不得使用 3.12+ parser 語法 |
+| 3.15 preview | 僅實驗與提前相容性測試，不作為生產基準 |

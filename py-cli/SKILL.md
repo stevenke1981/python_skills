@@ -1,295 +1,320 @@
 ---
 name: py-cli
 description: >
-  Python CLI tool development with modern frameworks.
-  Trigger when user mentions typer, click, rich, textual, argparse,
-  command-line interface, CLI app, terminal UI, console output,
-  progress bar, subcommands, argument parsing, shell completion.
-  Also trigger when user asks about building terminal tools,
-  interactive prompts, or TUI applications.
+  Build and review robust Python command-line applications with argparse, Typer, Click, Rich, or Textual. Use for commands, subcommands, options, config precedence, environment variables, stdin/stdout/stderr contracts, exit codes, JSON output, progress, shell completion, non-interactive automation, atomic file operations, packaging entry points, and CLI testing across Windows, macOS, and Linux.
+compatibility: Agent Skills-compatible. Framework APIs vary by version; inspect the lockfile and preserve existing command contracts before refactoring.
+metadata:
+  author: stevenke1981
+  version: "2.0.0"
+  last-reviewed: "2026-07-30"
 ---
 
-# Python CLI 工具開發
+# Python CLI 應用工程
 
-## Quick Start（30 秒上手）
+## 目標與邊界
+
+用此 skill 建立對人友善、對 script 穩定、可在 CI 非互動執行的命令列工具。CLI 是公開 API：command、option、exit code、stdout 格式與設定優先序都需要相容性管理。
+
+若需求是桌面視窗，使用 `py-gui`；若只是 library 內部函式，不要為了展示而建立多餘 CLI。
+
+## 執行流程
+
+1. **定義命令契約**：command/subcommand、參數、option、stdin、stdout、stderr、exit code 與副作用。
+2. **辨識使用者**：互動式人類、shell script、CI、排程、容器或遠端執行。
+3. **選擇框架**：依複雜度、既有依賴、型別與 plugin 需求決定 argparse、Typer、Click 或 Textual。
+4. **定義設定優先序**：CLI > environment > config file > defaults，並提供來源可觀測性。
+5. **分離核心邏輯**：command function 只解析、呼叫 service、格式化結果與轉換錯誤。
+6. **設計安全副作用**：dry-run、確認、atomic write、idempotency 與 path validation。
+7. **支援自動化**：`--json`、`--no-input`、穩定 exit code、禁用顏色/動畫與可預測輸出。
+8. **測試與打包**：CliRunner/subprocess、entry point、Windows 路徑與 shell completion。
+
+## 框架選擇
+
+| 需求 | 優先方案 |
+|---|---|
+| 零第三方依賴、標準庫工具 | `argparse` |
+| 型別提示、快速開發、Rich 整合 | Typer |
+| 大型成熟 CLI、plugin、細緻 context | Click |
+| 終端機全螢幕互動 UI | Textual |
+| 少數固定參數 | 不需要額外 framework |
+
+不要在既有 Click/Typer 專案中無理由切換框架；command contract 的穩定性比框架偏好重要。
+
+## CLI 輸出契約
+
+### stdout
+
+- 只輸出主要結果或可供 pipe 的資料。
+- `--json` 輸出單一有效 JSON document 或明確 JSON Lines。
+- machine-readable 模式不得混入 spinner、banner、warning 或 debug log。
+
+### stderr
+
+- 診斷、warning、progress 與錯誤訊息。
+- 敏感參數必須遮蔽。
+- 非 TTY 時停用動態 repaint 與 ANSI color，除非使用者明確要求。
+
+### exit code
+
+建議穩定分類並寫入文件：
+
+| Code | 意義 |
+|---:|---|
+| 0 | 成功 |
+| 1 | 一般執行失敗 |
+| 2 | 使用方式或驗證錯誤 |
+| 3 | 找不到資源／設定 |
+| 4 | 權限或認證失敗 |
+| 5 | 暫時性外部服務失敗 |
+| 130 | 使用者中斷（常見 shell 慣例） |
+
+不要把所有失敗都轉成 0，也不要讓 stack trace 成為一般使用者唯一訊息。
+
+## Typer 結構範例
 
 ```python
-"""最小 Typer CLI — 一個檔案即可運行"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated
+
 import typer
 
-app = typer.Typer(help="我的第一個 CLI 工具")
+
+app = typer.Typer(no_args_is_help=True)
+
+
+@dataclass(frozen=True, slots=True)
+class AppContext:
+    config_path: Path | None
+    json_output: bool
+
+
+@app.callback()
+def main(
+    ctx: typer.Context,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", exists=True, dir_okay=False, readable=True),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON."),
+    ] = False,
+) -> None:
+    ctx.obj = AppContext(config_path=config, json_output=json_output)
+
 
 @app.command()
-def hello(
-    name: str = typer.Argument(help="你的名字"),
-    greeting: str = typer.Option("你好", "--greeting", "-g", help="問候語"),
-    loud: bool = typer.Option(False, "--loud", "-l", help="大聲模式"),
+def greet(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Name to greet.")],
 ) -> None:
-    """向某人打招呼"""
-    message = f"{greeting}, {name}!"
-    if loud:
-        message = message.upper()
-    typer.echo(message)
+    settings = ctx.find_object(AppContext)
+    if settings is None:
+        raise RuntimeError("application context was not initialized")
+
+    payload = {"message": f"Hello, {name}!"}
+    if settings.json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False))
+    else:
+        typer.echo(payload["message"])
+
 
 if __name__ == "__main__":
     app()
 ```
 
-```bash
-# 執行
-python cli.py Alice --greeting Hi --loud
-# HI, ALICE!
+避免用 module-level mutable dict 保存 command 狀態。context、service 或 immutable settings 應由 callback/組合根建立並注入。
 
-# 自動 --help
-python cli.py --help
-```
+## argparse 結構
 
-## 核心概念
-
-### 1. Typer 型別驅動設計
-
-Typer 透過 Python type hints 自動產生 CLI 介面、驗證、補全與說明文件。
+對小型零依賴工具：
 
 ```python
-from pathlib import Path
-from enum import StrEnum
-import typer
+import argparse
+from collections.abc import Sequence
 
-class OutputFormat(StrEnum):
-    JSON = "json"
-    CSV = "csv"
-    TABLE = "table"
 
-app = typer.Typer()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="example-tool")
+    parser.add_argument("path")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    return parser
 
-@app.command()
-def convert(
-    input_file: Path = typer.Argument(..., exists=True, help="輸入檔案"),
-    output: Path = typer.Option("output.json", help="輸出檔案"),
-    fmt: OutputFormat = typer.Option(OutputFormat.JSON, help="輸出格式"),
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-) -> None:
-    """轉換檔案格式"""
-    if verbose:
-        typer.echo(f"讀取 {input_file} → {fmt.value} → {output}")
-```
 
-### 2. 子命令與命令群組
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        run(path=args.path, json_output=args.json_output)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    return 0
 
-```python
-app = typer.Typer(help="專案管理工具")
-db_app = typer.Typer(help="資料庫操作")
-app.add_typer(db_app, name="db")
-
-@app.command()
-def init(name: str) -> None:
-    """初始化專案"""
-    typer.echo(f"初始化: {name}")
-
-@db_app.command()
-def migrate(revision: str = "head") -> None:
-    """執行資料庫遷移"""
-    typer.echo(f"遷移到: {revision}")
-
-@db_app.command()
-def seed() -> None:
-    """填入種子資料"""
-    typer.echo("填入種子資料...")
-
-# CLI: mycli init myproject
-# CLI: mycli db migrate --revision abc123
-# CLI: mycli db seed
-```
-
-### 3. Rich Console 美化輸出
-
-```python
-from rich.console import Console
-from rich.table import Table
-from rich.progress import track
-import time
-
-console = Console()
-
-def show_users(users: list[dict]) -> None:
-    """用 Rich Table 顯示使用者列表"""
-    table = Table(title="使用者列表", show_lines=True)
-    table.add_column("ID", style="cyan", justify="right")
-    table.add_column("名稱", style="green")
-    table.add_column("信箱", style="magenta")
-    table.add_column("狀態", justify="center")
-
-    for user in users:
-        status = "✅" if user["active"] else "❌"
-        table.add_row(str(user["id"]), user["name"], user["email"], status)
-
-    console.print(table)
-
-def process_files(files: list[str]) -> None:
-    """帶進度條的檔案處理"""
-    for f in track(files, description="處理中..."):
-        time.sleep(0.1)  # 模擬處理
-    console.print("[bold green]全部完成！[/bold green]")
-```
-
-### 4. 互動式 Prompt
-
-```python
-import typer
-from rich.prompt import Prompt, Confirm, IntPrompt
-
-def setup_wizard() -> dict:
-    """設定精靈 — 互動式收集設定"""
-    name = Prompt.ask("專案名稱", default="my-project")
-    port = IntPrompt.ask("伺服器埠號", default=8000)
-    db_type = Prompt.ask(
-        "資料庫類型",
-        choices=["sqlite", "postgres", "mysql"],
-        default="sqlite",
-    )
-    use_docker = Confirm.ask("是否使用 Docker？", default=True)
-
-    return {"name": name, "port": port, "db": db_type, "docker": use_docker}
-```
-
-### 5. 錯誤處理與退出碼
-
-```python
-import typer
-from rich.console import Console
-
-console = Console(stderr=True)  # 錯誤輸出到 stderr
-
-def safe_main(func):
-    """CLI 錯誤處理包裝器"""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except FileNotFoundError as e:
-            console.print(f"[red]檔案不存在:[/red] {e}")
-            raise typer.Exit(code=1)
-        except PermissionError as e:
-            console.print(f"[red]權限不足:[/red] {e}")
-            raise typer.Exit(code=2)
-        except KeyboardInterrupt:
-            console.print("\n[yellow]使用者中斷[/yellow]")
-            raise typer.Exit(code=130)
-    return wrapper
-```
-
-## 實戰 Patterns
-
-### Pattern 1：設定檔整合
-
-**場景**：CLI 需要讀取設定檔（`~/.config/myapp/config.toml`）
-
-```python
-from pathlib import Path
-from dataclasses import dataclass, field
-import tomllib
-
-APP_DIR = Path(typer.get_app_dir("myapp"))
-CONFIG_PATH = APP_DIR / "config.toml"
-
-@dataclass(frozen=True)
-class AppConfig:
-    api_url: str = "https://api.example.com"
-    timeout: int = 30
-    verbose: bool = False
-
-def load_config() -> AppConfig:
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "rb") as f:
-            data = tomllib.load(f)
-        return AppConfig(**{k: v for k, v in data.items() if k in AppConfig.__dataclass_fields__})
-    return AppConfig()
-```
-
-### Pattern 2：Callback + Context 全域選項
-
-**場景**：所有子命令共用 `--verbose`, `--config` 等全域選項。
-
-```python
-from typing import Optional
-import typer
-
-app = typer.Typer()
-state = {"verbose": False}
-
-@app.callback()
-def main(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="詳細輸出"),
-    config: Optional[Path] = typer.Option(None, "--config", "-c", help="設定檔路徑"),
-) -> None:
-    """全域選項 — 在所有子命令之前執行"""
-    state["verbose"] = verbose
-    if config:
-        state["config"] = load_config(config)
-
-@app.command()
-def deploy(env: str = "staging") -> None:
-    if state["verbose"]:
-        typer.echo(f"部署到 {env}（詳細模式）")
-```
-
-### Pattern 3：Textual TUI 互動介面
-
-**場景**：需要完整的終端機 UI（類似 htop、lazygit）。
-
-```python
-from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, DataTable
-
-class LogViewer(App):
-    """簡單的日誌檢視器 TUI"""
-    BINDINGS = [
-        ("q", "quit", "離開"),
-        ("r", "refresh", "重新載入"),
-    ]
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield DataTable()
-        yield Footer()
-
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_columns("時間", "等級", "訊息")
-        table.add_rows([
-            ("10:01", "INFO", "伺服器啟動"),
-            ("10:02", "WARN", "記憶體使用率 85%"),
-            ("10:03", "ERROR", "連線逾時"),
-        ])
 
 if __name__ == "__main__":
-    LogViewer().run()
+    raise SystemExit(main())
 ```
 
-## 工具鏈推薦
+實際程式需 import `sys`；將 `argv` 注入可讓 unit test 不必 patch 全域 `sys.argv`。
 
-| 工具 | 用途 | 安裝 | 備註 |
-|------|------|------|------|
-| **typer** | CLI 框架（型別驅動） | `pip install typer` | 基於 Click，自動補全 |
-| **click** | CLI 框架（裝飾器風格） | `pip install click` | 生態系最大，Flask 同作者 |
-| **rich** | 美化終端輸出 | `pip install rich` | Table, Progress, Panel, Tree |
-| **textual** | 終端 UI 框架（TUI） | `pip install textual` | Rich 團隊出品，CSS-like 佈局 |
-| **prompt_toolkit** | 進階互動式輸入 | `pip install prompt_toolkit` | 自動補全、語法高亮 |
-| **questionary** | 互動式問卷 | `pip install questionary` | 確認、選單、多選 |
-| **trogon** | 自動 TUI from CLI | `pip install trogon` | 為 Click/Typer app 生成 TUI |
-| **shellingham** | 偵測當前 shell | `pip install shellingham` | Typer 自動補全所需 |
+## 設定優先序
+
+固定規則：
+
+```text
+command-line option
+  > environment variable
+  > project/user config file
+  > application default
+```
+
+- 每個 setting 只在一個地方 resolve。
+- `--show-config` 可顯示非敏感 effective settings 與來源。
+- config path 使用 `pathlib` 與 platform-appropriate user config directory。
+- 不自動讀取目前目錄中的未知設定檔，除非文件明確說明，避免不可信專案影響執行。
+- API key 不寫入一般明文 config；優先 environment、OS credential store 或 secret manager。
+
+## 非互動與 CI
+
+提供：
+
+- `--no-input` 或明確 `--yes`
+- `--json` / `--format`
+- `--quiet` / `--verbose`
+- timeout、retry 與 concurrency options
+- `--dry-run` 對寫入、刪除、部署、發信等副作用
+- stable exit codes
+- environment 變數對應
+
+規則：
+
+- stdin 不是 TTY 時不要突然 prompt。
+- `--yes` 只能略過已文件化確認，不能放寬權限或 validation。
+- CI 中 progress bar 不得汙染 machine output。
+- secret 不可出現在 process title、shell history 或 command echo；必要時從 stdin/file descriptor/secret store 讀取。
+
+## Path 與檔案操作
+
+- 使用 `Path`，但不要假設路徑分隔符與大小寫規則。
+- 接收 input path 時檢查 exists/type/readability。
+- output 避免覆蓋，除非 `--force` 或明確策略。
+- 寫檔使用同目錄 temporary file + flush/fsync（依需求）+ atomic replace。
+- archive extraction 防 path traversal、symlink 與 decompression bomb。
+- `-` 可作 stdin/stdout 時，清楚區分 text 與 binary mode。
+
+## 錯誤處理
+
+command boundary 將 domain error 映射為 CLI error：
+
+```python
+class UserFacingError(Exception):
+    def __init__(self, message: str, *, exit_code: int = 1) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+def render_failure(exc: UserFacingError, *, debug: bool) -> None:
+    typer.echo(f"error: {exc}", err=True)
+    if debug:
+        raise exc
+    raise typer.Exit(exc.exit_code)
+```
+
+- 預期錯誤顯示短訊息與修正方式。
+- `--debug` 才顯示 traceback。
+- 不捕捉 `BaseException`；保留 `KeyboardInterrupt`/`SystemExit` 語意。
+- 使用者中斷時清理資源並回傳適當 exit code。
+- partial success 要有明確 summary 與非零/零政策。
+
+## Progress 與 Rich
+
+- 只有 TTY 且非 JSON/quiet 模式才顯示動態 progress。
+- progress total 不確定時使用 spinner，但仍顯示目前階段。
+- log 與 progress 避免互相覆蓋。
+- 支援 `NO_COLOR` 或 framework 等效設定。
+- screen reader/redirect 情境提供純文字模式。
+
+## Plugin 與 Subcommand
+
+- 大型 CLI 可用 entry points 發現 plugin。
+- plugin API 需版本化、隔離 import error 並可列出停用原因。
+- 不在 `--help` 時載入大型模型、網路 client 或所有 plugin 副作用。
+- subcommand 名稱與 option 一旦發布即視為相容契約。
+- deprecated option 提供 warning、替代方式與移除版本。
+
+## 測試策略
+
+### Typer/Click Runner
+
+```python
+from typer.testing import CliRunner
+
+
+runner = CliRunner()
+
+
+def test_greet_json() -> None:
+    result = runner.invoke(app, ["--json", "greet", "Ada"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"message": "Hello, Ada!"}
+```
+
+測試還應涵蓋：
+
+- `--help` 與 no-args behavior
+- invalid argument 與 exit code
+- stdout/stderr 分離
+- JSON 可解析且無額外文字
+- config precedence
+- no-input / TTY 差異
+- temp directory、atomic write 與 `--force`
+- Ctrl-C、timeout 與 partial failure
+- entry point 安裝後用 subprocess smoke test
+- Windows quoting/path、macOS/Linux permission
+
+## 打包與 Entry Point
+
+```toml
+[project.scripts]
+example-tool = "example_tool.cli:app"
+```
+
+依框架確認 target 是 callable/app。建 wheel 後在乾淨 venv 測：
+
+```bash
+example-tool --help
+example-tool --version
+```
+
+不要只用 `python -m package.cli` 測試而忽略安裝 entry point。
+
+## 交付標準
+
+- command、option、stdin/stdout/stderr 與 exit code 契約已文件化。
+- 核心邏輯與 CLI framework 分離，可直接 unit test。
+- 設定優先序固定，effective config 可檢查且不洩漏秘密。
+- 非互動模式無 prompt、動畫或混雜 machine output。
+- 副作用有 dry-run、確認、atomic write 與可回復策略。
+- 錯誤映射穩定，一般模式不輸出無用 traceback。
+- Windows、macOS、Linux 的 path/encoding/entry point 已測。
+- wheel 安裝後的實際 command 已 smoke test。
 
 ## 延伸閱讀
 
-讀取 `references/` 目錄下的對應檔案：
-- `references/examples.md` — 完整可運行範例
-- `references/cheatsheet.md` — 速查表
-- `references/pitfalls.md` — 常見錯誤與解法
+- [完整範例](references/examples.md)
+- [速查表](references/cheatsheet.md)
+- [常見陷阱](references/pitfalls.md)
 
 ## 版本相容性
 
-| Python 版本 | 支援狀態 | 備註 |
-|-------------|----------|------|
-| 3.13+ | ✅ 完整支援 | Typer 0.15+, Rich 13+ |
-| 3.12 | ✅ 完整支援 | |
-| 3.11 | ✅ | StrEnum 首次加入 |
-| 3.10 | ⚠️ 部分 | 無 StrEnum，用 `str, Enum` 替代 |
+| 環境 | 建議 |
+|---|---|
+| Python 3.14 | 穩定維護基準 |
+| Python 3.10–3.13 | 支援；依專案最低版本調整 typing 語法 |
+| Typer/Click/Rich | 依 lockfile 與官方文件驗證 context、testing 與 output API |
+| Windows/macOS/Linux | 每個平台執行 entry point smoke test |
+| Preview Python | 只作 compatibility job，不作唯一發布環境 |

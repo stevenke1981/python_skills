@@ -1,0 +1,137 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "skill": "py-modern",
+      "should_trigger": [
+        "把這個 Python 3.9 專案升級到 3.14 並改用現代型別語法",
+        "說明 PEP 695、TypeIs、free-threaded Python 與版本相容策略"
+      ],
+      "should_not_trigger": [
+        "幫我替 FastAPI 端點加 JWT 驗證",
+        "分析這段 pandas ETL 為什麼記憶體暴增"
+      ]
+    },
+    {
+      "skill": "py-async",
+      "should_trigger": [
+        "用 asyncio TaskGroup 實作可取消且有逾時的並行下載器",
+        "修正 async producer consumer 的背壓與 graceful shutdown"
+      ],
+      "should_not_trigger": [
+        "建立一個同步 argparse CLI",
+        "將套件發布到 PyPI"
+      ]
+    },
+    {
+      "skill": "py-data",
+      "should_trigger": [
+        "用 Polars lazy pipeline 清洗 Parquet 並做分組聚合",
+        "設計 pandas 3.0 資料清洗流程並驗證 schema 與 null"
+      ],
+      "should_not_trigger": [
+        "替桌面程式加入系統匣圖示",
+        "寫一個 TCP echo server"
+      ]
+    },
+    {
+      "skill": "py-testing",
+      "should_trigger": [
+        "替這個 Python 專案補 pytest 單元、整合與 property-based tests",
+        "改善 flaky async tests 並建立 coverage 品質閘門"
+      ],
+      "should_not_trigger": [
+        "將 DataFrame 轉成 Parquet",
+        "建立 PySide6 主視窗"
+      ]
+    },
+    {
+      "skill": "py-packaging",
+      "should_trigger": [
+        "把 setup.py 遷移到 pyproject.toml 並建立 wheel 發布流程",
+        "用 uv 管理依賴、鎖定版本並設定 PyPI Trusted Publishing"
+      ],
+      "should_not_trigger": [
+        "優化 SQLAlchemy 查詢",
+        "實作 WebSocket 聊天室協議"
+      ]
+    },
+    {
+      "skill": "py-patterns",
+      "should_trigger": [
+        "用 Protocol 和依賴注入重構大型 Python 服務",
+        "評估 Repository、Strategy 與 Factory 是否適合這個架構"
+      ],
+      "should_not_trigger": [
+        "比較兩段程式的 benchmark",
+        "設定 Ruff 與 PyPI 發布"
+      ]
+    },
+    {
+      "skill": "py-cli",
+      "should_trigger": [
+        "用 Typer 建立有子命令、exit code 與設定檔的 CLI",
+        "設計可自動化的非互動模式、stdout/stderr 與 shell completion"
+      ],
+      "should_not_trigger": [
+        "建立 FastAPI REST endpoint",
+        "訓練 Hugging Face 模型"
+      ]
+    },
+    {
+      "skill": "py-perf",
+      "should_trigger": [
+        "用 py-spy、cProfile 與 benchmark 找出 Python 程式瓶頸",
+        "建立可重現的效能回歸測試並分析記憶體配置"
+      ],
+      "should_not_trigger": [
+        "替函式補型別提示",
+        "建立 tkinter 表單"
+      ]
+    },
+    {
+      "skill": "py-ai",
+      "should_trigger": [
+        "建立 provider-neutral 的 LLM tool calling agent 並驗證結構化輸出",
+        "設計有 reranking、引用、eval 與 prompt injection 防護的 RAG"
+      ],
+      "should_not_trigger": [
+        "用 NumPy 計算矩陣平均值",
+        "替一般 REST API 設定 CORS"
+      ]
+    },
+    {
+      "skill": "py-web",
+      "should_trigger": [
+        "建立 FastAPI、Pydantic 與 SQLAlchemy async 的生產級 API",
+        "修正 API transaction 邊界、認證、錯誤格式與 lifespan"
+      ],
+      "should_not_trigger": [
+        "用 socket 實作自訂二進位協議",
+        "打包 PySide6 成 Windows exe"
+      ]
+    },
+    {
+      "skill": "py-gui",
+      "should_trigger": [
+        "用 PySide6 建立跨平台桌面應用並正確處理背景工作",
+        "修正 tkinter 從 worker thread 更新 UI 的問題"
+      ],
+      "should_not_trigger": [
+        "建立純終端機 CLI",
+        "設計 pandas 資料驗證"
+      ]
+    },
+    {
+      "skill": "py-network",
+      "should_trigger": [
+        "實作有 framing、TLS、timeout 與 backpressure 的 TCP 協議",
+        "升級 websockets asyncio server 並處理連線限制與安全邊界"
+      ],
+      "should_not_trigger": [
+        "建立一般 FastAPI CRUD endpoint",
+        "用 pytest 測試純函式"
+      ]
+    }
+  ]
+}

@@ -1,349 +1,412 @@
-# py-ai — 完整可運行範例
+# py-ai 完整範例
 
-## 範例 1：LangChain RAG Pipeline（端到端）
+> 本文件補充 [`../SKILL.md`](../SKILL.md)。範例刻意把 provider/model 放在設定邊界，避免共用 skill 綁定會快速失效的模型名稱或 SDK。
+
+## 範例 1：Provider-neutral Structured Output
+
+安裝：
+
+```bash
+python -m pip install "pydantic>=2"
+```
 
 ```python
-"""LangChain RAG：載入文件 → 切割 → 嵌入 → 向量庫 → 查詢"""
-# pip install langchain langchain-openai langchain-community chromadb
-import os
-from pathlib import Path
+from __future__ import annotations
 
-from langchain_community.document_loaders import TextLoader
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+import asyncio
+from dataclasses import dataclass
+from typing import Protocol, Sequence
+
+from pydantic import BaseModel, Field, ValidationError
+from typing_extensions import Literal
 
 
-def build_rag_chain(docs_dir: str = "docs"):
-    """建立完整 RAG Chain"""
-    # 1. 載入所有 .txt 文件
-    documents = []
-    for txt_file in Path(docs_dir).glob("*.txt"):
-        loader = TextLoader(str(txt_file), encoding="utf-8")
-        documents.extend(loader.load())
-
-    if not documents:
-        raise FileNotFoundError(f"{docs_dir}/ 中沒有 .txt 檔案")
-
-    # 2. 文件切割
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", "。", "，", " "],
-    )
-    chunks = splitter.split_documents(documents)
-    print(f"切割成 {len(chunks)} 個 chunks")
-
-    # 3. 建立向量庫
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    vectorstore = Chroma.from_documents(chunks, embeddings)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-
-    # 4. 建立 RAG Chain
-    prompt = ChatPromptTemplate.from_template(
-        "根據以下上下文回答問題。如果上下文中沒有相關資訊，請說「資料中未提及」。\n\n"
-        "上下文：\n{context}\n\n"
-        "問題：{question}\n\n"
-        "回答："
-    )
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
-    chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    return chain
+@dataclass(frozen=True, slots=True)
+class Message:
+    role: Literal["system", "user", "assistant"]
+    content: str
 
 
-def main() -> None:
-    # 確保有文件目錄（示範用）
-    docs_dir = Path("docs")
-    docs_dir.mkdir(exist_ok=True)
-    sample = docs_dir / "sample.txt"
-    if not sample.exists():
-        sample.write_text(
-            "Python 3.12 於 2023 年 10 月發布。\n"
-            "主要新特性包括 PEP 695 type alias 語法和改進的錯誤訊息。\n"
-            "Python 3.13 加入了實驗性的 free-threaded 模式。\n",
-            encoding="utf-8",
+@dataclass(frozen=True, slots=True)
+class GenerationOptions:
+    model: str
+    timeout_seconds: float = 30.0
+    max_output_tokens: int = 500
+
+
+class ChatBackend(Protocol):
+    async def generate(
+        self,
+        messages: Sequence[Message],
+        options: GenerationOptions,
+    ) -> str: ...
+
+
+class TicketClassification(BaseModel):
+    category: Literal["billing", "technical", "other"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str = Field(min_length=1, max_length=200)
+
+
+class FakeBackend:
+    """單元測試用；真實 adapter 只需實作同一 Protocol。"""
+
+    async def generate(
+        self,
+        messages: Sequence[Message],
+        options: GenerationOptions,
+    ) -> str:
+        del messages, options
+        return (
+            '{"category":"technical","confidence":0.94,'
+            '"summary":"Application cannot connect to the server."}'
         )
 
-    chain = build_rag_chain(str(docs_dir))
 
-    questions = [
-        "Python 3.12 有什麼新特性？",
-        "free-threaded 模式是哪個版本加入的？",
+async def classify_ticket(
+    backend: ChatBackend,
+    text: str,
+    options: GenerationOptions,
+) -> TicketClassification:
+    messages = [
+        Message(
+            role="system",
+            content=(
+                "Classify the ticket. Return JSON matching the requested schema. "
+                "Do not invent fields."
+            ),
+        ),
+        Message(role="user", content=text),
     ]
-    for q in questions:
-        print(f"\nQ: {q}")
-        answer = chain.invoke(q)
-        print(f"A: {answer}")
+    raw = await asyncio.wait_for(
+        backend.generate(messages, options),
+        timeout=options.timeout_seconds,
+    )
+    try:
+        return TicketClassification.model_validate_json(raw)
+    except ValidationError as exc:
+        raise ValueError("backend returned invalid classification JSON") from exc
+
+
+async def main() -> None:
+    result = await classify_ticket(
+        FakeBackend(),
+        "The desktop client says connection refused.",
+        GenerationOptions(model="test-model"),
+    )
+    print(result.model_dump())
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 ```
+
+真實 provider adapter 應另外處理認證、base URL、timeout、retry、usage、streaming 與錯誤映射；application service 不需要改動。
 
 ---
 
-## 範例 2：LlamaIndex Agent with Tools
+## 範例 2：安全的 Tool Executor
+
+模型只產生「工具請求草稿」，executor 再次驗證 canonical path 與權限。
 
 ```python
-"""LlamaIndex Agent — 使用工具回答問題"""
-# pip install llama-index llama-index-llms-openai
-from llama_index.core.agent import ReActAgent
-from llama_index.core.tools import FunctionTool
-from llama_index.llms.openai import OpenAI
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
-def calculate_bmi(weight_kg: float, height_m: float) -> str:
-    """計算 BMI 值"""
-    bmi = weight_kg / (height_m ** 2)
-    if bmi < 18.5:
-        category = "過輕"
-    elif bmi < 24:
-        category = "正常"
-    elif bmi < 27:
-        category = "過重"
-    else:
-        category = "肥胖"
-    return f"BMI = {bmi:.1f}，分類為「{category}」"
+class FileToolRequest(BaseModel):
+    action: Literal["read", "list"]
+    relative_path: str = Field(min_length=1, max_length=240)
 
 
-def search_nutrition(food: str) -> str:
-    """查詢食物營養資訊（模擬）"""
-    nutrition_db: dict[str, str] = {
-        "雞胸肉": "每 100g：蛋白質 31g、脂肪 3.6g、熱量 165 kcal",
-        "白飯": "每 100g：碳水 28g、蛋白質 2.7g、熱量 130 kcal",
-        "蘋果": "每 100g：碳水 14g、纖維 2.4g、熱量 52 kcal",
-    }
-    return nutrition_db.get(food, f"找不到「{food}」的營養資訊")
+class FileToolExecutor:
+    def __init__(self, root: Path, *, max_read_bytes: int = 64_000) -> None:
+        self._root = root.resolve(strict=True)
+        self._max_read_bytes = max_read_bytes
+
+    def _resolve(self, relative_path: str) -> Path:
+        candidate = (self._root / relative_path).resolve(strict=True)
+        try:
+            candidate.relative_to(self._root)
+        except ValueError as exc:
+            raise PermissionError("path escapes the allowed root") from exc
+        return candidate
+
+    def execute(self, request: FileToolRequest) -> dict[str, object]:
+        path = self._resolve(request.relative_path)
+
+        if request.action == "list":
+            if not path.is_dir():
+                raise NotADirectoryError(path)
+            return {
+                "entries": sorted(child.name for child in path.iterdir()),
+            }
+
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        if path.stat().st_size > self._max_read_bytes:
+            raise ValueError("file exceeds the configured read limit")
+        return {"content": path.read_text(encoding="utf-8")}
 
 
 def main() -> None:
-    # 建立工具
-    bmi_tool = FunctionTool.from_defaults(fn=calculate_bmi)
-    nutrition_tool = FunctionTool.from_defaults(fn=search_nutrition)
-
-    # 建立 ReAct Agent
-    llm = OpenAI(model="gpt-4o-mini", temperature=0)
-    agent = ReActAgent.from_tools(
-        tools=[bmi_tool, nutrition_tool],
-        llm=llm,
-        verbose=True,  # 顯示思考過程
-    )
-
-    # 對話
-    response = agent.chat("我身高 175cm 體重 70kg，BMI 是多少？")
-    print(f"\n最終回答: {response}")
-
-    response = agent.chat("推薦我一道高蛋白食物，查一下雞胸肉的營養")
-    print(f"\n最終回答: {response}")
+    executor = FileToolExecutor(Path("."))
+    raw_model_output = '{"action":"list","relative_path":"."}'
+    request = FileToolRequest.model_validate_json(raw_model_output)
+    print(json.dumps(executor.execute(request), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
     main()
 ```
 
+仍需依應用加入 tenant/resource 授權、symlink policy、audit log、deadline 與人工確認。Schema 本身不是 sandbox。
+
 ---
 
-## 範例 3：Transformers 本地推論（分類 + 生成）
+## 範例 3：本地多語 Embedding 搜尋
+
+安裝：
+
+```bash
+python -m pip install sentence-transformers numpy
+```
 
 ```python
-"""Transformers Pipeline — 無需 API Key 的本地推論"""
-# pip install transformers torch sentencepiece
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+
+@dataclass(frozen=True, slots=True)
+class Document:
+    source_id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    source_id: str
+    text: str
+    score: float
+
+
+def search(
+    model: SentenceTransformer,
+    documents: list[Document],
+    query: str,
+    *,
+    top_k: int,
+) -> list[SearchResult]:
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
+
+    texts = [document.text for document in documents]
+    document_vectors = model.encode(
+        texts,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+    )
+    query_vector = model.encode(
+        [query],
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+    )[0]
+
+    scores = np.asarray(document_vectors) @ np.asarray(query_vector)
+    order = np.argsort(scores)[::-1][:top_k]
+    return [
+        SearchResult(
+            source_id=documents[index].source_id,
+            text=documents[index].text,
+            score=float(scores[index]),
+        )
+        for index in order
+    ]
+
+
+def main() -> None:
+    model_id = os.environ.get(
+        "EMBEDDING_MODEL",
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    )
+    model = SentenceTransformer(model_id)
+    documents = [
+        Document("python", "Python 3.14 introduces deferred annotation evaluation."),
+        Document("rag", "RAG combines retrieval evidence with generation."),
+        Document("network", "TCP is a byte stream and needs message framing."),
+    ]
+    for result in search(model, documents, "如何用檢索改善生成？", top_k=2):
+        print(f"{result.score:.3f} {result.source_id}: {result.text}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+生產環境應 pin 核准的 model revision，保存 embedding/index version，並用標註資料量測 retrieval quality；不要只看單一查詢。
+
+---
+
+## 範例 4：RAG Citation Eval Harness
+
+此範例不依賴特定模型，專注於可重跑的評估資料格式。
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class EvalCase:
+    case_id: str
+    question: str
+    required_sources: frozenset[str]
+    expected_phrase: str
+
+
+@dataclass(frozen=True, slots=True)
+class RagAnswer:
+    text: str
+    cited_sources: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class EvalResult:
+    case_id: str
+    phrase_found: bool
+    required_sources_present: bool
+
+    @property
+    def passed(self) -> bool:
+        return self.phrase_found and self.required_sources_present
+
+
+def evaluate(case: EvalCase, answer: RagAnswer) -> EvalResult:
+    return EvalResult(
+        case_id=case.case_id,
+        phrase_found=case.expected_phrase.casefold() in answer.text.casefold(),
+        required_sources_present=(
+            case.required_sources <= answer.cited_sources
+        ),
+    )
+
+
+def main() -> None:
+    case = EvalCase(
+        case_id="python-version",
+        question="What is the stable baseline in this repository?",
+        required_sources=frozenset({"AGENTS.md"}),
+        expected_phrase="Python 3.14",
+    )
+    answer = RagAnswer(
+        text="The repository uses Python 3.14 as its stable maintenance baseline.",
+        cited_sources=frozenset({"AGENTS.md"}),
+    )
+    result = evaluate(case, answer)
+    print(result)
+    raise SystemExit(0 if result.passed else 1)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+實際 eval 還應加入 retrieval recall、citation span correctness、unsupported claims、權限隔離、latency 與 cost。
+
+---
+
+## 範例 5：本地 Transformers Runtime（模型由設定提供）
+
+安裝方式依 CPU/GPU 平台選擇核准的 PyTorch／Transformers 套件。執行前設定：
+
+```bash
+export HF_MODEL_ID="your-approved-model-id"
+export HF_TASK="text-classification"
+# 正式環境另設定 pin 到 commit/tag 的 HF_REVISION
+```
+
+```python
+from __future__ import annotations
+
+import os
+
+import torch
 from transformers import pipeline
 
 
-def sentiment_analysis() -> None:
-    """情感分析"""
-    classifier = pipeline(
-        "sentiment-analysis",
-        model="distilbert-base-uncased-finetuned-sst-2-english",
-    )
-    texts = [
-        "I love this new Python feature!",
-        "The documentation is confusing and outdated.",
-        "It works, but nothing special.",
-    ]
-    results = classifier(texts)
-    for text, result in zip(texts, results):
-        print(f"  {result['label']:>8} ({result['score']:.3f}): {text}")
+def build_pipeline():
+    model_id = os.environ["HF_MODEL_ID"]
+    task = os.environ.get("HF_TASK", "text-classification")
+    revision = os.environ.get("HF_REVISION", "main")
+    device = 0 if torch.cuda.is_available() else -1
 
-
-def text_generation() -> None:
-    """文字生成"""
-    generator = pipeline(
-        "text-generation",
-        model="gpt2",
-        max_new_tokens=50,
-        do_sample=True,
-        temperature=0.7,
+    return pipeline(
+        task=task,
+        model=model_id,
+        revision=revision,
+        device=device,
+        trust_remote_code=False,
     )
-    prompt = "The future of artificial intelligence is"
-    outputs = generator(prompt, num_return_sequences=2)
-    for i, output in enumerate(outputs):
-        print(f"  [{i+1}] {output['generated_text']}")
-
-
-def question_answering() -> None:
-    """閱讀理解"""
-    qa = pipeline(
-        "question-answering",
-        model="distilbert-base-cased-distilled-squad",
-    )
-    context = (
-        "Python was created by Guido van Rossum and first released in 1991. "
-        "It emphasizes code readability with significant indentation. "
-        "Python 3.12 introduced type parameter syntax and improved error messages."
-    )
-    questions = [
-        "Who created Python?",
-        "When was Python first released?",
-        "What did Python 3.12 introduce?",
-    ]
-    for q in questions:
-        answer = qa(question=q, context=context)
-        print(f"  Q: {q}")
-        print(f"  A: {answer['answer']} (confidence: {answer['score']:.3f})")
 
 
 def main() -> None:
-    print("=== 情感分析 ===")
-    sentiment_analysis()
-
-    print("\n=== 文字生成 ===")
-    text_generation()
-
-    print("\n=== 閱讀理解 ===")
-    question_answering()
+    inference = build_pipeline()
+    print(inference("This deployment is reliable and easy to operate."))
 
 
 if __name__ == "__main__":
     main()
 ```
+
+正式部署應在 build/release 階段預先下載並驗證權重，記錄 license/hash/revision，測試 GPU OOM 與 CPU/remote fallback，不在每個 request 重新載入模型。
 
 ---
 
-## 範例 4：Embedding + Cosine Similarity 語意搜尋
+## 範例 6：有界 Async Batch
 
 ```python
-"""手動實作語意搜尋 — 不依賴向量資料庫"""
-# pip install langchain-openai numpy
-import numpy as np
-from langchain_openai import OpenAIEmbeddings
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
+from typing import TypeVar
 
 
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """計算兩個向量的 cosine similarity"""
-    dot = np.dot(a, b)
-    norm = np.linalg.norm(a) * np.linalg.norm(b)
-    return float(dot / norm) if norm > 0 else 0.0
+T = TypeVar("T")
+R = TypeVar("R")
 
 
-def semantic_search(
-    query: str,
-    corpus: list[str],
-    embeddings_model: OpenAIEmbeddings,
-    top_k: int = 3,
-) -> list[tuple[str, float]]:
-    """語意搜尋：回傳最相關的文件"""
-    # 一次嵌入所有文件 + query
-    all_texts = corpus + [query]
-    all_vectors = embeddings_model.embed_documents(all_texts)
+async def bounded_map(
+    func: Callable[[T], Awaitable[R]],
+    items: Sequence[T],
+    *,
+    concurrency: int,
+    deadline_seconds: float,
+) -> list[R]:
+    if concurrency < 1:
+        raise ValueError("concurrency must be positive")
 
-    query_vec = np.array(all_vectors[-1])
-    corpus_vecs = [np.array(v) for v in all_vectors[:-1]]
+    semaphore = asyncio.Semaphore(concurrency)
 
-    # 計算相似度並排序
-    scores = [
-        (text, cosine_similarity(query_vec, vec))
-        for text, vec in zip(corpus, corpus_vecs)
-    ]
-    scores.sort(key=lambda x: x[1], reverse=True)
-    return scores[:top_k]
+    async def run(item: T) -> R:
+        async with semaphore:
+            return await func(item)
 
-
-def main() -> None:
-    corpus = [
-        "Python 是一種通用程式語言，強調可讀性",
-        "機器學習是人工智慧的一個子領域",
-        "Docker 容器化技術讓應用部署更一致",
-        "RAG 結合了檢索與生成來回答問題",
-        "PostgreSQL 是強大的開源關聯式資料庫",
-        "FastAPI 是高效能的 Python Web 框架",
-        "向量搜尋使用嵌入空間中的距離來尋找相似文件",
-    ]
-
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-
-    queries = ["如何建立 AI 應用？", "資料庫技術"]
-    for query in queries:
-        print(f"\n查詢: {query}")
-        results = semantic_search(query, corpus, embeddings, top_k=3)
-        for text, score in results:
-            print(f"  [{score:.3f}] {text}")
-
-
-if __name__ == "__main__":
-    main()
+    async with asyncio.timeout(deadline_seconds):
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(run(item)) for item in items]
+    return [task.result() for task in tasks]
 ```
 
----
-
-## 範例 5：ONNX Runtime 高效推論
-
-```python
-"""ONNX Runtime 推論 — 比 PyTorch 更快的部署選項"""
-# pip install onnxruntime optimum[onnxruntime] transformers
-from pathlib import Path
-
-from optimum.onnxruntime import ORTModelForSequenceClassification
-from transformers import AutoTokenizer, pipeline
-
-
-def export_and_inference() -> None:
-    """匯出模型到 ONNX 並進行推論"""
-    model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-    onnx_dir = Path("onnx_model")
-
-    # 載入 ONNX 模型（首次會自動匯出）
-    model = ORTModelForSequenceClassification.from_pretrained(
-        model_name,
-        export=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # 儲存到本地
-    model.save_pretrained(onnx_dir)
-    tokenizer.save_pretrained(onnx_dir)
-
-    # 使用 pipeline 推論
-    onnx_pipeline = pipeline(
-        "sentiment-analysis",
-        model=model,
-        tokenizer=tokenizer,
-    )
-
-    texts = [
-        "ONNX Runtime makes inference much faster!",
-        "I don't like slow model loading times.",
-    ]
-    results = onnx_pipeline(texts)
-    for text, result in zip(texts, results):
-        print(f"  {result['label']} ({result['score']:.3f}): {text}")
-
-
-def main() -> None:
-    print("=== ONNX Runtime 推論 ===")
-    export_and_inference()
-
-
-if __name__ == "__main__":
-    main()
-```
+大量 input 改用 bounded queue，避免先建立全部 task。Provider retry、rate limit 與 token/cost budget 仍需納入同一 deadline。
