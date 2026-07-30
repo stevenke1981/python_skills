@@ -5,7 +5,7 @@ description: >
 compatibility: Agent Skills-compatible. TaskGroup and asyncio.timeout require Python 3.11+; respect the target project's minimum Python version.
 metadata:
   author: stevenke1981
-  version: "2.0.0"
+  version: "2.0.1"
   last-reviewed: "2026-07-30"
 ---
 
@@ -154,15 +154,22 @@ async def bounded_map(
 每個 consumer 需要自己的停止訊號，且每次 `get()` 都必須對應一次 `task_done()`：
 
 ```python
+from __future__ import annotations
+
 import asyncio
 from typing import Final
 
 
-STOP: Final = object()
+class _Stop:
+    pass
+
+
+STOP: Final = _Stop()
+QueueItem = int | _Stop
 
 
 async def producer(
-    queue: asyncio.Queue[object],
+    queue: asyncio.Queue[QueueItem],
     *,
     worker_count: int,
 ) -> None:
@@ -173,32 +180,31 @@ async def producer(
 
 
 async def consumer(
-    queue: asyncio.Queue[object],
+    queue: asyncio.Queue[QueueItem],
     worker_id: int,
 ) -> None:
     while True:
         item = await queue.get()
         try:
-            if item is STOP:
+            if isinstance(item, _Stop):
                 return
-            await process_item(worker_id, int(item))
+            await process_item(worker_id, item)
         finally:
             queue.task_done()
 
 
 async def main() -> None:
     worker_count = 4
-    queue: asyncio.Queue[object] = asyncio.Queue(maxsize=32)
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue(maxsize=32)
 
     async with asyncio.TaskGroup() as group:
-        group.create_task(producer(queue, worker_count=worker_count))
         for worker_id in range(worker_count):
             group.create_task(consumer(queue, worker_id))
-
-    await queue.join()
+        await producer(queue, worker_count=worker_count)
+        await queue.join()
 ```
 
-不要讓 consumer 重新放回單一 sentinel；這會留下未完成項目或造成不穩定關閉。若 worker 可能動態增加，設計明確的 queue shutdown protocol。
+`process_item()` 代表專案的非同步處理函式。不要讓 consumer 重新放回單一 sentinel；這會留下未完成項目或造成不穩定關閉。若 worker 可能動態增加，設計明確的 queue shutdown protocol。
 
 ## Blocking 與 CPU-bound 工作
 
