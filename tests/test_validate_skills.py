@@ -133,6 +133,26 @@ class ValidatorTests(unittest.TestCase):
             issues = validator.validate_repository(root)
             self.assertTrue(any("broken relative link" in issue.message for issue in issues))
 
+    def test_code_that_resembles_markdown_links_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            code = textwrap.dedent(
+                r'''
+                ```python
+                pattern = r"^[^\\/](?!.*\.\.).*$"
+
+                def first[T](items: list[T]) -> T:
+                    return items[0]
+                ```
+                '''
+            ).strip()
+            content = self.valid_skill().replace(
+                "1. Validate the repository.",
+                code,
+            )
+            self.make_repo(root, content)
+            self.assertEqual(validator.validate_repository(root), [])
+
     def test_folded_description_is_parsed(self) -> None:
         fields, _ = validator.parse_frontmatter(
             self.valid_skill(), Path("py-example/SKILL.md")
