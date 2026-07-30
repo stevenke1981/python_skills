@@ -13,7 +13,8 @@ from typing import Any
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):(?:\s*(.*))?$")
-LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+LINK_RE = re.compile(r"\[[^\]\n]+\]\(([^)\n]+)\)")
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 USER_PATH_RE = re.compile(
     r"(?:^|[\s`'\"])(?:/home/[^/\s]+/|/mnt/(?:data|user-data)/|[A-Za-z]:\\Users\\[^\\\s]+\\)"
 )
@@ -106,6 +107,33 @@ def parse_frontmatter(text: str, path: Path) -> tuple[dict[str, str], str]:
     return fields, body
 
 
+def prose_without_fenced_code(body: str) -> tuple[str, bool]:
+    """Return prose-only Markdown and whether a fence remained unclosed."""
+    prose: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+
+    for line in body.splitlines(keepends=True):
+        match = FENCE_RE.match(line)
+        if match:
+            marker = match.group(1)
+            if fence_character is None:
+                fence_character = marker[0]
+                fence_length = len(marker)
+            elif marker[0] == fence_character and len(marker) >= fence_length:
+                fence_character = None
+                fence_length = 0
+            prose.append("\n" if line.endswith("\n") else "")
+            continue
+
+        if fence_character is None:
+            prose.append(line)
+        else:
+            prose.append("\n" if line.endswith("\n") else "")
+
+    return "".join(prose), fence_character is not None
+
+
 def _relative_link_target(raw_target: str) -> str | None:
     target = raw_target.strip()
     if not target or target.startswith(
@@ -118,6 +146,10 @@ def _relative_link_target(raw_target: str) -> str | None:
     return target.split("#", maxsplit=1)[0] or None
 
 
+def _issue(level: str, path: Path | str, message: str) -> Issue:
+    return Issue(level, str(path), message)
+
+
 def validate_skill(skill_dir: Path, root: Path) -> list[Issue]:
     issues: list[Issue] = []
     skill_file = skill_dir / "SKILL.md"
@@ -126,66 +158,60 @@ def validate_skill(skill_dir: Path, root: Path) -> list[Issue]:
     try:
         text = skill_file.read_text(encoding="utf-8")
     except OSError as exc:
-        return [
-            Issue("error", str(relative_skill_file), f"cannot read file: {exc}")
-        ]
+        return [_issue("error", relative_skill_file, f"cannot read file: {exc}")]
 
     try:
         fields, body = parse_frontmatter(text, relative_skill_file)
     except ValueError as exc:
-        return [Issue("error", str(relative_skill_file), str(exc))]
+        return [_issue("error", relative_skill_file, str(exc))]
 
     name = fields.get("name", "")
     description = fields.get("description", "")
     compatibility = fields.get("compatibility", "")
 
     if not name:
-        issues.append(
-            Issue("error", str(relative_skill_file), "missing frontmatter name")
-        )
+        issues.append(_issue("error", relative_skill_file, "missing frontmatter name"))
     elif not NAME_RE.fullmatch(name):
         issues.append(
-            Issue(
+            _issue(
                 "error",
-                str(relative_skill_file),
+                relative_skill_file,
                 "name must contain lowercase letters, digits, and single hyphens only",
             )
         )
     elif name != skill_dir.name:
         issues.append(
-            Issue(
+            _issue(
                 "error",
-                str(relative_skill_file),
+                relative_skill_file,
                 f"name {name!r} must match parent directory {skill_dir.name!r}",
             )
         )
 
     if not description.strip():
-        issues.append(
-            Issue("error", str(relative_skill_file), "missing description")
-        )
+        issues.append(_issue("error", relative_skill_file, "missing description"))
     elif len(description) > 1024:
         issues.append(
-            Issue(
+            _issue(
                 "error",
-                str(relative_skill_file),
+                relative_skill_file,
                 f"description has {len(description)} characters; maximum is 1024",
             )
         )
     elif len(description.split()) < 8:
         issues.append(
-            Issue(
+            _issue(
                 "warning",
-                str(relative_skill_file),
+                relative_skill_file,
                 "description is unusually short and may trigger poorly",
             )
         )
 
     if compatibility and len(compatibility) > 500:
         issues.append(
-            Issue(
+            _issue(
                 "error",
-                str(relative_skill_file),
+                relative_skill_file,
                 f"compatibility has {len(compatibility)} characters; maximum is 500",
             )
         )
@@ -193,9 +219,9 @@ def validate_skill(skill_dir: Path, root: Path) -> list[Issue]:
     line_count = len(text.splitlines())
     if line_count > 500:
         issues.append(
-            Issue(
+            _issue(
                 "error",
-                str(relative_skill_file),
+                relative_skill_file,
                 f"SKILL.md has {line_count} lines; project limit is 500",
             )
         )
@@ -203,68 +229,68 @@ def validate_skill(skill_dir: Path, root: Path) -> list[Issue]:
     for heading in REQUIRED_HEADINGS:
         if heading not in body:
             issues.append(
-                Issue(
+                _issue(
                     "error",
-                    str(relative_skill_file),
+                    relative_skill_file,
                     f"missing required heading: {heading}",
                 )
             )
 
     for relative_reference in REQUIRED_REFERENCES:
-        reference = skill_dir / relative_reference
-        if not reference.is_file():
+        if not (skill_dir / relative_reference).is_file():
             issues.append(
-                Issue(
+                _issue(
                     "error",
-                    str(relative_skill_file),
+                    relative_skill_file,
                     f"missing required reference: {relative_reference}",
                 )
             )
 
-    for match in LINK_RE.finditer(body):
+    prose, unclosed_fence = prose_without_fenced_code(body)
+    if unclosed_fence:
+        issues.append(
+            _issue("error", relative_skill_file, "unbalanced fenced code block")
+        )
+
+    for match in LINK_RE.finditer(prose):
         target = _relative_link_target(match.group(1))
         if target is None:
             continue
+
         linked_path = (skill_dir / target).resolve()
         try:
             linked_path.relative_to(skill_dir.resolve())
         except ValueError:
             issues.append(
-                Issue(
+                _issue(
                     "error",
-                    str(relative_skill_file),
+                    relative_skill_file,
                     f"relative link escapes the skill directory: {target}",
                 )
             )
             continue
+
         if not linked_path.exists():
             issues.append(
-                Issue(
+                _issue(
                     "error",
-                    str(relative_skill_file),
+                    relative_skill_file,
                     f"broken relative link: {target}",
                 )
             )
 
-    if sum(
-        1 for line in body.splitlines() if line.lstrip().startswith("```")
-    ) % 2:
-        issues.append(
-            Issue("error", str(relative_skill_file), "unbalanced fenced code block")
-        )
-
     if USER_PATH_RE.search(body):
         issues.append(
-            Issue(
+            _issue(
                 "error",
-                str(relative_skill_file),
+                relative_skill_file,
                 "contains a user-specific absolute path; use project-relative examples",
             )
         )
 
-    if "TODO" in body or "FIXME" in body:
+    if "TODO" in prose or "FIXME" in prose:
         issues.append(
-            Issue("warning", str(relative_skill_file), "contains TODO or FIXME text")
+            _issue("warning", relative_skill_file, "contains TODO or FIXME text")
         )
 
     return issues
@@ -274,16 +300,10 @@ def load_json(path: Path, root: Path, issues: list[Issue]) -> Any | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        issues.append(
-            Issue("error", str(path.relative_to(root)), "required file is missing")
-        )
+        issues.append(_issue("error", path.relative_to(root), "required file is missing"))
     except (OSError, json.JSONDecodeError) as exc:
         issues.append(
-            Issue(
-                "error",
-                str(path.relative_to(root)),
-                f"cannot parse JSON: {exc}",
-            )
+            _issue("error", path.relative_to(root), f"cannot parse JSON: {exc}")
         )
     return None
 
@@ -298,16 +318,14 @@ def validate_manifest(
 
     entries = manifest.get("skills")
     if not isinstance(entries, list):
-        issues.append(
-            Issue("error", "skills-manifest.json", "skills must be a list")
-        )
+        issues.append(_issue("error", "skills-manifest.json", "skills must be a list"))
         return
 
     manifest_names: list[str] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             issues.append(
-                Issue(
+                _issue(
                     "error",
                     "skills-manifest.json",
                     f"skills[{index}] must contain a string name",
@@ -318,7 +336,7 @@ def validate_manifest(
 
     if len(manifest_names) != len(set(manifest_names)):
         issues.append(
-            Issue(
+            _issue(
                 "error",
                 "skills-manifest.json",
                 "contains duplicate skill names",
@@ -329,7 +347,7 @@ def validate_manifest(
     extra = set(manifest_names) - skill_names
     if missing:
         issues.append(
-            Issue(
+            _issue(
                 "error",
                 "skills-manifest.json",
                 f"missing skills: {', '.join(sorted(missing))}",
@@ -337,12 +355,20 @@ def validate_manifest(
         )
     if extra:
         issues.append(
-            Issue(
+            _issue(
                 "error",
                 "skills-manifest.json",
                 f"unknown skills: {', '.join(sorted(extra))}",
             )
         )
+
+
+def _is_example_list(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) >= 2
+        and all(isinstance(item, str) and item.strip() for item in value)
+    )
 
 
 def validate_trigger_cases(
@@ -356,7 +382,7 @@ def validate_trigger_cases(
     cases = payload.get("cases")
     if not isinstance(cases, list):
         issues.append(
-            Issue("error", "evals/trigger-cases.json", "cases must be a list")
+            _issue("error", "evals/trigger-cases.json", "cases must be a list")
         )
         return
 
@@ -364,42 +390,49 @@ def validate_trigger_cases(
     for index, case in enumerate(cases):
         if not isinstance(case, dict):
             issues.append(
-                Issue(
+                _issue(
                     "error",
                     "evals/trigger-cases.json",
                     f"cases[{index}] must be an object",
                 )
             )
             continue
-        skill = case.get("skill")
-        positive = case.get("should_trigger")
-        negative = case.get("should_not_trigger")
 
-        if not isinstance(skill, str):
+        skill = case.get("skill")
+        if not isinstance(skill, str) or not skill:
             issues.append(
-                Issue(
+                _issue(
                     "error",
                     "evals/trigger-cases.json",
-                    f"cases[{index}].skill must be a string",
+                    f"cases[{index}].skill must be a non-empty string",
                 )
             )
             continue
-        seen.add(skill)
 
-        if not isinstance(positive, list) or len(positive) < 2:
+        if skill in seen:
             issues.append(
-                Issue(
+                _issue(
                     "error",
                     "evals/trigger-cases.json",
-                    f"{skill} needs at least two should_trigger examples",
+                    f"duplicate trigger case for {skill}",
                 )
             )
-        if not isinstance(negative, list) or len(negative) < 2:
+        seen.add(skill)
+
+        if not _is_example_list(case.get("should_trigger")):
             issues.append(
-                Issue(
+                _issue(
                     "error",
                     "evals/trigger-cases.json",
-                    f"{skill} needs at least two should_not_trigger examples",
+                    f"{skill} needs at least two non-empty should_trigger examples",
+                )
+            )
+        if not _is_example_list(case.get("should_not_trigger")):
+            issues.append(
+                _issue(
+                    "error",
+                    "evals/trigger-cases.json",
+                    f"{skill} needs at least two non-empty should_not_trigger examples",
                 )
             )
 
@@ -407,7 +440,7 @@ def validate_trigger_cases(
     extra = seen - skill_names
     if missing:
         issues.append(
-            Issue(
+            _issue(
                 "error",
                 "evals/trigger-cases.json",
                 f"missing skills: {', '.join(sorted(missing))}",
@@ -415,7 +448,7 @@ def validate_trigger_cases(
         )
     if extra:
         issues.append(
-            Issue(
+            _issue(
                 "error",
                 "evals/trigger-cases.json",
                 f"unknown skills: {', '.join(sorted(extra))}",
@@ -432,7 +465,7 @@ def validate_repository(root: Path) -> list[Issue]:
         if path.is_dir() and (path / "SKILL.md").is_file()
     )
     if not skill_dirs:
-        return [Issue("error", ".", "no py-*/SKILL.md directories found")]
+        return [_issue("error", ".", "no py-*/SKILL.md directories found")]
 
     for skill_dir in skill_dirs:
         issues.extend(validate_skill(skill_dir, root))
