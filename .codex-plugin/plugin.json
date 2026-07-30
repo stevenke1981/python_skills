@@ -1,0 +1,41 @@
+{
+  "name": "python-engineering-skills",
+  "version": "1.0.0",
+  "description": "Reusable Python engineering workflows for ChatGPT and Codex.",
+  "author": {
+    "name": "stevenke1981",
+    "url": "https://github.com/stevenke1981"
+  },
+  "homepage": "https://github.com/stevenke1981/python_skills",
+  "repository": "https://github.com/stevenke1981/python_skills",
+  "keywords": [
+    "python",
+    "asyncio",
+    "testing",
+    "packaging",
+    "performance",
+    "ai",
+    "web",
+    "gui",
+    "networking"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Python Engineering Skills",
+    "shortDescription": "Python development, testing, AI, web, GUI, and tooling workflows",
+    "longDescription": "A curated collection of task-oriented Python engineering skills for modern language features, async code, data, testing, packaging, architecture, CLI, performance, AI, web, GUI, and networking work.",
+    "developerName": "stevenke1981",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/stevenke1981/python_skills",
+    "defaultPrompt": [
+      "Use the appropriate Python skill to analyze and improve this project.",
+      "Build this Python feature with tests, packaging, and compatibility checks.",
+      "Review this Python code for architecture, correctness, security, and performance."
+    ],
+    "brandColor": "#3776AB"
+  }
+}
