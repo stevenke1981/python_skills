@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -17,7 +18,12 @@ def load_validator() -> ModuleType:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {VALIDATOR_PATH}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
