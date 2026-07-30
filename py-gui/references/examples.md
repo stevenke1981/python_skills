@@ -114,7 +114,7 @@ class FailureEvent:
     message: str
 
 
-type WorkerEvent = ProgressEvent | FailureEvent
+WorkerEvent = ProgressEvent | FailureEvent
 
 
 def run_job(events: Queue[WorkerEvent], cancelled: Event) -> None:
@@ -181,17 +181,14 @@ class App(ctk.CTk):
         self.after(50, self.poll_events)
 
     def poll_events(self) -> None:
-        finished = False
         try:
             while True:
                 event = self.events.get_nowait()
                 if isinstance(event, FailureEvent):
                     self.status.configure(text=event.message)
-                    finished = True
                 else:
                     self.progress.set(event.percent / 100)
                     self.status.configure(text=event.message)
-                    finished = finished or event.finished
         except Empty:
             pass
 
@@ -200,9 +197,8 @@ class App(ctk.CTk):
             self.after(50, self.poll_events)
             return
 
-        if finished or not worker_alive:
-            self.start_button.configure(state="normal")
-            self.cancel_button.configure(state="disabled")
+        self.start_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
 
     def close_app(self) -> None:
         self.cancelled.set()
@@ -217,7 +213,7 @@ worker 不呼叫 `after()` 或 widget method；主執行緒定時輪詢 thread-s
 
 ---
 
-## 範例 3：PySide6 QThread Worker
+## 範例 3：PySide6 QThread Worker 與可生效取消
 
 安裝：
 
@@ -232,7 +228,15 @@ import sys
 import time
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QProgressBar, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMainWindow,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class Worker(QObject):
@@ -240,15 +244,12 @@ class Worker(QObject):
     failed = Signal(str)
     finished = Signal()
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._cancelled = False
-
     @Slot()
     def run(self) -> None:
+        thread = QThread.currentThread()
         try:
             for percent in range(101):
-                if self._cancelled:
+                if thread.isInterruptionRequested():
                     return
                 time.sleep(0.03)
                 self.progress.emit(percent)
@@ -257,14 +258,8 @@ class Worker(QObject):
         finally:
             self.finished.emit()
 
-    @Slot()
-    def cancel(self) -> None:
-        self._cancelled = True
-
 
 class MainWindow(QMainWindow):
-    cancel_requested = Signal()
-
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("QThread Worker")
@@ -287,39 +282,49 @@ class MainWindow(QMainWindow):
         self.thread: QThread | None = None
         self.worker: Worker | None = None
         self.start_button.clicked.connect(self.start_job)
-        self.cancel_button.clicked.connect(self.cancel_requested.emit)
+        self.cancel_button.clicked.connect(self.cancel_job)
 
     @Slot()
     def start_job(self) -> None:
         if self.thread is not None and self.thread.isRunning():
             return
 
-        self.thread = QThread(self)
-        self.worker = Worker()
-        self.worker.moveToThread(self.thread)
+        thread = QThread(self)
+        worker = Worker()
+        worker.moveToThread(thread)
 
-        self.thread.started.connect(self.worker.run)
-        self.worker.progress.connect(self.progress.setValue)
-        self.worker.progress.connect(
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.progress.setValue)
+        worker.progress.connect(
             lambda value: self.status.setText(f"處理中：{value}%")
         )
-        self.worker.failed.connect(
+        worker.failed.connect(
             lambda message: self.status.setText(f"失敗：{message}")
         )
-        self.worker.finished.connect(self.finish_job)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.cancel_requested.connect(self.worker.cancel)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self.on_thread_finished)
+        thread.finished.connect(thread.deleteLater)
 
+        self.thread = thread
+        self.worker = worker
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.status.setText("啟動中")
-        self.thread.start()
+        thread.start()
 
     @Slot()
-    def finish_job(self) -> None:
-        self.status.setText("工作已結束")
+    def cancel_job(self) -> None:
+        if self.thread is not None and self.thread.isRunning():
+            self.status.setText("取消中")
+            self.thread.requestInterruption()
+
+    @Slot()
+    def on_thread_finished(self) -> None:
+        if self.status.text() == "取消中":
+            self.status.setText("已取消")
+        elif not self.status.text().startswith("失敗"):
+            self.status.setText("完成")
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.worker = None
@@ -333,83 +338,4 @@ if __name__ == "__main__":
     raise SystemExit(application.exec())
 ```
 
-長工作若在單次 blocking call 內，單純設定 `_cancelled` 不會立刻停止；底層 API 也必須支援 timeout/cancellation。
-
----
-
-## 範例 4：可正確排序型別的 ttk.Treeview
-
-```python
-from __future__ import annotations
-
-import tkinter as tk
-from dataclasses import dataclass
-from tkinter import ttk
-
-
-@dataclass(frozen=True, slots=True)
-class Employee:
-    name: str
-    age: int
-    title: str
-
-
-EMPLOYEES = [
-    Employee("Alice", 28, "工程師"),
-    Employee("Bob", 35, "設計師"),
-    Employee("Carol", 42, "經理"),
-    Employee("Dave", 23, "實習生"),
-]
-
-
-def create_table() -> None:
-    root = tk.Tk()
-    root.title("員工列表")
-
-    columns = ("name", "age", "title")
-    tree = ttk.Treeview(root, columns=columns, show="headings", height=10)
-    tree.pack(fill="both", expand=True, padx=12, pady=12)
-
-    labels = {"name": "姓名", "age": "年齡", "title": "職稱"}
-    rows: dict[str, Employee] = {}
-
-    for column in columns:
-        tree.heading(column, text=labels[column])
-
-    for employee in EMPLOYEES:
-        item_id = tree.insert(
-            "",
-            "end",
-            values=(employee.name, employee.age, employee.title),
-        )
-        rows[item_id] = employee
-
-    def sort_by(column: str, reverse: bool = False) -> None:
-        key_functions = {
-            "name": lambda employee: employee.name.casefold(),
-            "age": lambda employee: employee.age,
-            "title": lambda employee: employee.title.casefold(),
-        }
-        ordered_ids = sorted(
-            rows,
-            key=lambda item_id: key_functions[column](rows[item_id]),
-            reverse=reverse,
-        )
-        for index, item_id in enumerate(ordered_ids):
-            tree.move(item_id, "", index)
-        tree.heading(
-            column,
-            command=lambda: sort_by(column, not reverse),
-        )
-
-    for column in columns:
-        tree.heading(column, command=lambda value=column: sort_by(value))
-
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    create_table()
-```
-
-不要直接用 `Treeview.set()` 的字串值排序數字或日期；保存 typed model，再依欄位使用正確 key。
+將 cancel slot 排入同一個被 `run()` 佔用的 worker thread，通常不會即時執行；此範例改由主執行緒呼叫 `QThread.requestInterruption()`，worker 在迴圈中查詢。若底層是單次 blocking call，該 API 本身仍必須支援 timeout/cancellation。
