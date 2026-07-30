@@ -1,0 +1,20 @@
+{
+  "name": "stevenke-python-plugins",
+  "interface": {
+    "displayName": "StevenKe Python Plugins"
+  },
+  "plugins": [
+    {
+      "name": "python-engineering-skills",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
