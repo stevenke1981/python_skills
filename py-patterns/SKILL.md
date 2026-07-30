@@ -5,7 +5,7 @@ description: >
 compatibility: Agent Skills-compatible. Apply patterns only when they solve observed variation, coupling, lifecycle, or testing problems.
 metadata:
   author: stevenke1981
-  version: "2.0.0"
+  version: "2.0.1"
   last-reviewed: "2026-07-30"
 ---
 
@@ -44,7 +44,7 @@ metadata:
 
 ## Protocol 與依賴注入
 
-Protocol 適合描述呼叫端真正需要的最小能力：
+Protocol 應描述呼叫端真正需要的最小能力：
 
 ```python
 from __future__ import annotations
@@ -113,14 +113,15 @@ class CheckoutService:
 
 ## Strategy
 
-若策略只需要一個操作，可直接使用 callable：
+若策略只需要一個操作，可直接使用 callable。下列寫法相容 Python 3.10+：
 
 ```python
 from collections.abc import Callable
 from decimal import Decimal
+from typing import TypeAlias
 
 
-type PricingRule = Callable[[Decimal], Decimal]
+PricingRule: TypeAlias = Callable[[Decimal], Decimal]
 
 
 def apply_pricing(subtotal: Decimal, rule: PricingRule) -> Decimal:
@@ -130,7 +131,7 @@ def apply_pricing(subtotal: Decimal, rule: PricingRule) -> Decimal:
     return total
 ```
 
-只有在策略需要多個方法、狀態或 lifecycle 時才升級為 class/Protocol。
+只有在策略需要多個方法、狀態或 lifecycle 時才升級為 class/Protocol。若專案最低版本已是 Python 3.12，可依 `py-modern` 改用 PEP 695 `type` alias。
 
 ## Adapter 與 Anti-corruption Layer
 
@@ -144,9 +145,11 @@ def apply_pricing(subtotal: Decimal, rule: PricingRule) -> Decimal:
 
 ## Repository
 
-Repository 應表達 domain 語意：
+Repository 應表達 domain 語意，而不是通用 CRUD：
 
 ```python
+from __future__ import annotations
+
 from typing import Protocol
 
 
@@ -155,18 +158,21 @@ class OrderRepository(Protocol):
     def add(self, order: Order) -> None: ...
 ```
 
-避免建立無限泛型的 `BaseRepository[T]`，只提供 `get/list/create/update/delete`，卻把所有查詢細節洩漏到 service。
+`Order` 由 domain 定義；`from __future__ import annotations` 讓此片段可使用 forward reference。
 
 Repository 規則：
 
 - 不在每個方法內自行 commit。
 - 查詢回傳 domain/read model，而非任意 ORM session。
 - eager/lazy loading 策略在 adapter 內可測。
-- 對複雜報表可直接使用 query service，不必硬塞入 aggregate repository。
+- 複雜報表可直接使用 query service，不必硬塞入 aggregate repository。
+- 避免只有 `get/list/create/update/delete` 的無語意 `BaseRepository[T]`。
 
 ## Unit of Work 與 Transaction
 
 ```python
+from __future__ import annotations
+
 from types import TracebackType
 from typing import Protocol, Self
 
@@ -220,7 +226,6 @@ class UnitOfWork(Protocol):
 所有 concrete implementation 在程式入口組裝：
 
 ```python
-
 def build_checkout_service(settings: Settings) -> CheckoutService:
     gateway = HttpPaymentGateway(
         base_url=settings.payment_url,
@@ -231,7 +236,7 @@ def build_checkout_service(settings: Settings) -> CheckoutService:
     return CheckoutService(payments=gateway, audit=audit)
 ```
 
-避免在 domain/service 內讀環境變數、建立 HTTP client 或 import framework global。
+此片段假設 `Settings`、`HttpPaymentGateway` 與 `StructuredAuditLogger` 由 infrastructure 層提供。避免在 domain/service 內讀環境變數、建立 HTTP client 或 import framework global。
 
 ## 常見反模式
 
@@ -263,6 +268,7 @@ def build_checkout_service(settings: Settings) -> CheckoutService:
 - 外部副作用有 adapter、timeout、error mapping 與 contract test。
 - state/event 流程具明確規則、觀測、idempotency 與失敗政策。
 - 沒有為單一簡單實作建立不必要 pattern 層。
+- 範例語法與目標專案最低 Python 版本一致。
 
 ## 延伸閱讀
 
