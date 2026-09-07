@@ -3,6 +3,7 @@ name: Validate Agent Skills
 on:
   push:
     branches:
+      - main
       - master
       - "agent/**"
   pull_request:
@@ -23,30 +24,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.11"
-          - "3.14"
-
+        python-version: ["3.11", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
-
       - name: Install validation dependency
         run: python -m pip install --requirement requirements-dev.txt
-
       - name: Run validator unit tests
         run: python -m unittest discover -s tests -v
-
       - name: Run repository quality gates
         run: python scripts/validate_skills.py --strict
-
       - name: Run Agent Skills reference validator
         shell: bash
         run: |

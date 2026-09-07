@@ -5,8 +5,8 @@ description: >
 compatibility: Agent Skills-compatible. pytest 9 supports Python 3.10+; inspect the project's pinned pytest and plugin versions before using newer APIs.
 metadata:
   author: stevenke1981
-  version: "2.0.0"
-  last-reviewed: "2026-07-30"
+  version: "2.0.1"
+  last-reviewed: "2026-09-07"
 ---
 
 # Python 測試工程
@@ -23,7 +23,7 @@ metadata:
 2. **辨識測試層級**：unit、component、integration、contract、end-to-end 或 performance。
 3. **選擇穩定邊界**：優先測 public behavior；只有必要時才測內部細節。
 4. **控制非決定性**：時間、亂數、網路、檔案、環境變數、locale、timezone 與並行。
-5. **建立代表性案例**：正常、邊界、錯誤、空值、極端值、權限與故障注入。
+5. **建立代表性案例**：正常、邊界、錯誤、空值、極端值、權限與故障注入。安裝器另測真正封裝產物、Unicode 路徑、dry-run 零寫入，以及部分寫入失敗後的回復。
 6. **執行最小到完整套件**：先單一測試，再目錄，最後完整 CI matrix。
 7. **檢查測試品質**：避免過度 mock、共享狀態、順序依賴與無條件重跑。
 8. **回報驗證範圍**：列出執行命令、通過結果、未覆蓋環境與已知限制。

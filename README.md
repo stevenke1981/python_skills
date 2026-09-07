@@ -1,179 +1,101 @@
 # Python Skills
 
-面向 ChatGPT、Codex 與其他 AI 編碼代理的 Python 技能包，遵循 Agent Skills 目錄與 `SKILL.md` 格式。內容涵蓋語言、非同步、資料、測試、打包、架構、CLI、效能、AI、Web、GUI 與網路程式設計。
+面向 Codex、ChatGPT 與其他相容 AI 編碼代理的 **12 組 Python 工程技能**。每組提供任務選擇、執行流程、安全邊界、交付標準，以及按需載入的範例與除錯參考。這是 skills-only 套件，不是 Python runtime，也不包含 MCP server。
 
-本專案同時是一個可安裝的 **skills-only Codex plugin**：
+## 開始使用
 
-- Plugin manifest：`.codex-plugin/plugin.json`
-- Marketplace：`.agents/plugins/marketplace.json`
-- Plugin skills：`skills/`
-- 完整安裝說明：[`CODEX_PLUGIN.md`](CODEX_PLUGIN.md)
+安裝腳本只需要 **Python 3.10+ 標準函式庫**，不需 API key，不下載 Python 套件。腳本修改的是「執行腳本的環境」，不會將本機檔案自動同步到 ChatGPT 網頁或其他 VM。
 
-## Codex / ChatGPT 快速安裝
-
-加入 GitHub Marketplace：
+本次整合主線為 `main`，原 `master` 保留。Clone 時明確指定分支，避免取得尚未整合 plugin 的舊預設分支：
 
 ```bash
-codex plugin marketplace add stevenke1981/python_skills
-codex plugin marketplace list
+git clone --branch main --single-branch https://github.com/stevenke1981/python_skills.git
+cd python_skills
+python scripts/install_codex.py --mode skills --scope user --dry-run
+python scripts/install_codex.py --mode skills --scope user
 ```
 
-從已下載的儲存庫安裝到使用者 Marketplace：
+Windows PowerShell（`python` 不存在時可改用 `py -3`）：
+
+```powershell
+.\scripts\install_codex.ps1 --mode skills --scope user --dry-run
+.\scripts\install_codex.ps1 --mode skills --scope user
+```
+
+重新開啟 Codex session 以探索 skills。在支援本機 Marketplace 的環境，使用 plugin 模式：
 
 ```bash
 python scripts/install_codex.py --mode plugin --scope user
 ```
 
-直接安裝 skills 到 Codex VM：
+此命令建立本機 plugin 與 marketplace entry；仍需在支援的 Plugins 介面選擇 **Python Engineering Skills** 並安裝。它不會變更模型、sandbox 或核准規則。
+
+## 更新與保護既有檔案
+
+重新執行安裝命令可更新未修改的安裝。安裝器先驗證來源、manifest、路徑與共用設定，再暫存全部內容，最後替換目標；可捕捉的 I/O 錯誤會觸發回復。
+
+每個安裝目錄包含 `.python-skills-install.json` 雜湊紀錄。**舊版沒有紀錄，或內容曾被手動修改時，預設停止而不是覆蓋。** 請先自行備份，再明確使用 `--force`；`--force` 不會繞過 symlink、junction 或路徑越界檢查。
 
 ```bash
-python scripts/install_codex.py --mode skills --scope user
+# 僅在已備份、確定要覆蓋舊版或本機修改後執行
+python scripts/install_codex.py --mode skills --scope user --force
+
+# 解除安裝；模式及範圍需與安裝時一致
+python scripts/uninstall_codex.py --mode skills --scope user --dry-run
+python scripts/uninstall_codex.py --mode skills --scope user
 ```
 
-Windows PowerShell：
-
-```powershell
-.\scripts\install_codex.ps1 --mode plugin --scope user
-```
-
-重新執行安裝命令會先取代這個外掛或同名 skills 的舊版本，但會保留使用者其他 Marketplace 外掛與 skills。
-
-本專案不是單純的 Python 教學筆記。每個 skill 都提供：
-
-- 可被代理辨識的觸發描述
-- 任務導向的執行流程與決策指南
-- 安全、相容性與品質閘門
-- 按需載入的完整範例、速查表與常見陷阱
-- 可由 CI、外掛驗證器與 Agent Skills 參考工具驗證的結構
+其他 skills、其他 marketplace entries 與 `config.toml` 不會被移除。完整範圍、復原與限制請看 [CODEX_PLUGIN.md](CODEX_PLUGIN.md)。
 
 ## 技能列表
 
-| Skill | 主要用途 | 建議最低 Python |
-|---|---|---:|
-| [`py-modern`](py-modern/SKILL.md) | 現代語法、版本升級、型別系統、free-threaded Python | 3.12 |
-| [`py-async`](py-async/SKILL.md) | asyncio、結構化並行、取消、逾時、背壓 | 3.11 |
-| [`py-data`](py-data/SKILL.md) | pandas、Polars、Arrow、DuckDB、ETL 與資料品質 | 3.10 |
-| [`py-testing`](py-testing/SKILL.md) | pytest、測試架構、property-based、coverage | 3.10 |
-| [`py-packaging`](py-packaging/SKILL.md) | pyproject.toml、uv、build、wheel、PyPI 發布 | 3.10 |
-| [`py-patterns`](py-patterns/SKILL.md) | Protocol、依賴注入、設計模式、架構邊界 | 3.10 |
-| [`py-cli`](py-cli/SKILL.md) | argparse、Typer、Click、Rich、Textual 與 CLI UX | 3.10 |
-| [`py-perf`](py-perf/SKILL.md) | profiling、benchmark、記憶體與效能回歸 | 3.10 |
-| [`py-ai`](py-ai/SKILL.md) | LLM、RAG、tool calling、本地模型、eval 與防護 | 3.10 |
-| [`py-web`](py-web/SKILL.md) | FastAPI、Pydantic、SQLAlchemy、ASGI 與 API 安全 | 3.10 |
-| [`py-gui`](py-gui/SKILL.md) | tkinter、CustomTkinter、PySide6、桌面架構與打包 | 3.10 |
-| [`py-network`](py-network/SKILL.md) | TCP/UDP、TLS、WebSocket、協議、重試與背壓 | 3.10 |
+| Skill | 主要任務 | 建議最低 Python |
+|---|---|---|
+| [py-modern](skills/py-modern/SKILL.md) | 現代語法、升級、型別與 free-threaded Python | 3.12 |
+| [py-async](skills/py-async/SKILL.md) | asyncio、取消、逾時、背壓 | 3.11 |
+| [py-data](skills/py-data/SKILL.md) | pandas、Polars、Arrow、DuckDB、ETL | 3.10 |
+| [py-testing](skills/py-testing/SKILL.md) | 測試策略、故障注入、產物驗收 | 3.10 |
+| [py-packaging](skills/py-packaging/SKILL.md) | pyproject.toml、依賴、ZIP、wheel、發布 | 3.10 |
+| [py-patterns](skills/py-patterns/SKILL.md) | Protocol、依賴注入與架構 | 3.10 |
+| [py-cli](skills/py-cli/SKILL.md) | argparse、Typer、Click、Rich、CLI UX | 3.10 |
+| [py-perf](skills/py-perf/SKILL.md) | profiling、benchmark、效能回歸 | 3.10 |
+| [py-ai](skills/py-ai/SKILL.md) | LLM、RAG、tool calling、eval | 3.10 |
+| [py-web](skills/py-web/SKILL.md) | FastAPI、Pydantic、SQLAlchemy、API 安全 | 3.10 |
+| [py-gui](skills/py-gui/SKILL.md) | tkinter、PySide6、桌面架構與打包 | 3.10 |
+| [py-network](skills/py-network/SKILL.md) | TCP/UDP、TLS、WebSocket、重試 | 3.10 |
 
-完整的選用方式與交叉搭配請看 [`index.md`](index.md)。
+先依最後交付物選一個主要 skill，再按需加入一至兩個支援 skill；只在需要時讀取 `references/`。例如 API 以 `py-web` 為主，搭配 `py-testing` 與 `py-packaging`。
 
-## 快速驗證
+## 下載版與原始碼版
 
-只使用標準函式庫的技能與外掛驗證器：
+GitHub Actions 的 **Validate and Package Codex Plugin** 成功後，提供 `python-engineering-skills` artifact，內含可解壓安裝的 ZIP 及 `.sha256`。ZIP 內已包含解除安裝所需的 `skills-manifest.json` 與共用工具，不依賴原始碼 checkout。
 
-```bash
-python scripts/validate_skills.py --strict
-python scripts/sync_plugin_skills.py --check
-python scripts/validate_plugin.py
-python -m unittest discover -s tests -v
-```
+Linux 可用 `sha256sum -c <ZIP檔名>.sha256`；PowerShell 使用 `Get-FileHash <ZIP檔名> -Algorithm SHA256` 比對雜湊。Checksum 用來檢查傳輸完整性，不是數位簽章。
 
-建立可發布 ZIP：
+開發、完整驗證與重新打包需使用 Git 原始碼版。安裝用 ZIP 刻意不包含測試、CI 或根目錄維護副本。
 
-```bash
-python scripts/package_plugin.py
-```
+## 維護與品質閘門（Git 原始碼版）
 
-再使用 Agent Skills 參考驗證器：
+修改前閱讀 `AGENTS.md` 與 `CONTRIBUTING.md`。`index.md` 提供路由索引；`skills-manifest.json` 與 `evals/trigger-cases.json` 維護機器清單及觸發案例。
 
-```bash
-python -m pip install -r requirements-dev.txt
-for skill in py-*; do agentskills validate "$skill"; done
-```
-
-Windows PowerShell：
-
-```powershell
-python scripts/validate_skills.py --strict
-python scripts/sync_plugin_skills.py --check
-python scripts/validate_plugin.py
-python -m unittest discover -s tests -v
-python -m pip install -r requirements-dev.txt
-Get-ChildItem -Directory py-* | ForEach-Object { agentskills validate $_.FullName }
-```
-
-## 使用方式
-
-1. 由代理或 Plugin Marketplace 依 `description` 選擇主要 skill。
-2. 載入該 skill 的 `SKILL.md`。
-3. 只有需要完整程式碼、速查或除錯時，再讀取 `references/`。
-4. 同一任務通常只需要一個主要 skill，加上一至兩個支援 skill。
-
-範例：
-
-- 建立 FastAPI 服務：`py-web` 為主，搭配 `py-testing` 與 `py-packaging`。
-- 建立 RAG API：`py-ai` 為主，搭配 `py-web`、`py-data` 與 `py-testing`。
-- 現代化舊專案：`py-modern` 為主，搭配 `py-packaging` 與 `py-testing`。
-- 建立即時網路服務：`py-network` 為主，搭配 `py-async` 與 `py-testing`。
-
-## 目錄結構
-
-```text
-python_skills/
-├── .codex-plugin/
-│   └── plugin.json                 # Codex / ChatGPT plugin manifest
-├── .agents/plugins/
-│   └── marketplace.json            # 本機與 GitHub Marketplace 清單
-├── .github/workflows/
-│   ├── validate-skills.yml
-│   └── package-plugin.yml          # 驗證並產生 ZIP artifact
-├── AGENTS.md                       # 跨代理維護與執行規範
-├── CODEX_PLUGIN.md                 # 安裝、更新、移除與發布說明
-├── CONTRIBUTING.md
-├── README.md
-├── index.md                        # skill 路由索引
-├── skills-manifest.json            # 機器可讀清單
-├── evals/
-│   └── trigger-cases.json
-├── scripts/
-│   ├── install_codex.py
-│   ├── install_codex.ps1
-│   ├── install_codex.sh
-│   ├── package_plugin.py
-│   ├── sync_plugin_skills.py
-│   ├── uninstall_codex.py
-│   ├── validate_plugin.py
-│   └── validate_skills.py
-├── tests/
-│   ├── test_validate_plugin.py
-│   └── test_validate_skills.py
-├── skills/                         # 安裝用鏡像，由 py-* 同步產生
-│   └── py-*/
-│       ├── SKILL.md
-│       └── references/
-└── py-*/                           # 唯一維護來源
-    ├── SKILL.md
-    └── references/
-        ├── examples.md
-        ├── cheatsheet.md
-        └── pitfalls.md
-```
-
-## 版本政策
-
-- 穩定維護基準為 Python 3.14。
-- 安裝器、同步器與外掛驗證器維持 Python 3.10+ 標準函式庫相容。
-- 各 skill 的最低版本不同，實際實作必須先遵守目標專案的 `requires-python` 與 CI 矩陣。
-- Python 3.15 與套件預覽功能只可作為 preview 選項，不作為預設生產方案。
-- 套件 API、支援版本與安全建議會變動；更新時應以官方文件或上游發行說明為準。
-
-## 維護
-
-根目錄 `py-*` 是技能唯一維護來源。修改後執行：
+根目錄 `py-*` 是唯一維護來源，`skills/` 是安裝鏡像，請勿分別手動修改。同步器拒絕空來源、不完整來源及不安全路徑；內容相同的檔案不會重新複製。
 
 ```bash
 python scripts/sync_plugin_skills.py
+python scripts/sync_plugin_skills.py --check
 python scripts/validate_skills.py --strict
 python scripts/validate_plugin.py
 python -m unittest discover -s tests -v
+python -m compileall -q scripts tests
+python scripts/package_plugin.py
 ```
 
-修改前先讀取 [`AGENTS.md`](AGENTS.md)，新增或更新 skill 請依 [`CONTRIBUTING.md`](CONTRIBUTING.md) 執行。CI 會檢查 frontmatter、目錄名稱、必要章節、相對連結、參考檔、manifest、觸發案例、外掛鏡像與 ZIP 打包。
+Agent Skills 參考驗證器需另安裝 `requirements-dev.txt`，CI 會執行。離線標準函式庫測試不需安裝該依賴。
+
+CI 覆蓋 `main`、`master` 與 `agent/**`：安裝工具在 Ubuntu、Windows、macOS × Python 3.10/3.14 執行回歸測試，另以 Python 3.11/3.14 執行上游 Agent Skills 驗證。ZIP 只在跨平台矩陣成功後建立。
+
+## 相容性與限制
+
+Python 3.14 是技能內容維護基準，安裝工具最低版本為 3.10；實際產生的程式仍需遵守目標專案最低版本。預覽功能不可自動當成正式環境基準。
+
+回復機制不是跨多路徑的單一原子交易，也不保證斷電復原；請勿同時執行多個安裝、同步或移除程序。`--force` 成功後不保留歷史備份。官方格式與套件 API 仍應以目標版本文件確認。

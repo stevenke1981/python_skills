@@ -5,8 +5,8 @@ description: >
 compatibility: Agent Skills-compatible. Packaging tools and metadata standards evolve; inspect the project backend, lockfile, target indexes, and official PyPA documentation before changing release workflows.
 metadata:
   author: stevenke1981
-  version: "2.0.0"
-  last-reviewed: "2026-07-30"
+  version: "2.0.1"
+  last-reviewed: "2026-09-07"
 ---
 
 # Python 打包、依賴與發布
@@ -23,9 +23,9 @@ metadata:
 2. **盤點現況**：`setup.py`、`setup.cfg`、`pyproject.toml`、requirements、lockfile、CI 與發布方式。
 3. **決定相容契約**：distribution name、import package、最低 Python、平台、ABI、公開 entry points 與 semantic versioning。
 4. **選擇 backend 與 layout**：保留既有可用 backend；新專案依需求選 setuptools、Hatchling、Flit、PDM backend、maturin 等。
-5. **分離 runtime 與 development dependencies**：runtime 放 `[project.dependencies]`，開發工具使用 dependency groups 或專案既有機制。
+5. **分離 runtime 與 development dependencies**：runtime 放 `[project]` 的 `dependencies` 陣列，開發工具使用 dependency groups 或專案既有機制。
 6. **建立 lock/reproducibility 策略**：應用與部署環境鎖定完整解析；library metadata 保留合理相容範圍。
-7. **建置與安裝驗證**：在乾淨環境測 sdist、wheel、metadata、entry point 與缺漏資源。
+7. **建置與安裝驗證**：在乾淨環境測真正發布的 sdist、wheel 或 ZIP；移除對 checkout 的隱性依賴，測 metadata、entry point、資源、安裝、升級與移除。
 8. **安全發布**：優先 OIDC Trusted Publishing、受保護 environment、不可變 tag 與 provenance。
 9. **記錄遷移與回復**：列出舊安裝方式、破壞性 metadata 變更與 rollback。
 
